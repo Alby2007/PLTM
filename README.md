@@ -48,7 +48,10 @@ A novel AI memory architecture using jury-based conflict resolution, context-awa
 - Zero errors or crashes
 - 100% reproducible results
 
-**vs SOTA:** +32.1 percentage points (Mem0: 66.9%, Ours: 99%)
+**Comparison with Mem0:**
+- Our system: 99% on our 200-test benchmark
+- Mem0 baseline: 66.9% on their MemoryAgentBench (different test set)
+- **Want apples-to-apples?** Run both on same tests: [`benchmarks/compare_with_mem0.py`](./benchmarks/compare_with_mem0.py)
 
 [View full benchmark results →](./BENCHMARK_200_RESULTS.md)
 
@@ -78,9 +81,38 @@ python run_200_test_benchmark.py
 - ✅ **Grounded**: 50% from published benchmarks, 50% from real-world scenarios
 
 
+## 🧪 Experiment Capabilities (Optional)
+
+Your system now includes **lifelong learning** infrastructure for research experiments:
+
+- **Lifelong Learning Agent** - Agent that improves over time through accumulated knowledge
+- **Experiment Framework** - Measure improvement across days/weeks/months
+- **Demo & Examples** - Ready-to-run demonstrations
+
+**Quick start:**
+```bash
+# See agent improvement over time
+python examples/lifelong_learning_demo.py
+
+# Read experiment guide
+cat EXPERIMENTS_QUICKSTART.md
+```
+
+**Research potential:**
+- Lifelong learning papers (agent improvement over time)
+- Personalization studies (individual adaptation)
+- Multi-agent collaboration (shared memory)
+- Meta-learning experiments (learning to learn)
+
+**Note:** Completely optional - doesn't affect core system (99% benchmark accuracy maintained ✅)
+
+[View experiment guide →](./EXPERIMENTS_QUICKSTART.md) | [Full docs →](./docs/LIFELONG_LEARNING.md)
+
+---
+
 ## Quick Start
 
-`### Prerequisites
+### Prerequisites
 
 - **Python 3.11+** (required for Outlines compatibility)
 - Homebrew (macOS) or package manager for Python installation
