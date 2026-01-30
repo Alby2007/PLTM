@@ -7,11 +7,11 @@ A novel AI memory architecture using jury-based conflict resolution, context-awa
 ## 🎉 Achievement Summary
 
 **Benchmark Performance:**
-- ✅ **99% Accuracy** (198/200 comprehensive tests - ACTUAL, not projected)
-- ✅ **+32.1 percentage points** vs Mem0 baseline (66.9%)
-- ✅ **Largest validation suite** in AI memory (200 real tests)
+- ✅ **99% Accuracy** on 200-test pattern-matching benchmark (198/200 passing)
+- ✅ **86% Accuracy** on comprehensive 300-test suite (258/300 passing)
+- ✅ **+19.1 percentage points** vs Mem0 baseline (66.9%)
+- ✅ **Semantic understanding** via world knowledge + LLM fallback
 - ✅ **Production-ready** with comprehensive observability
-- ✅ **World-class** conflict resolution validated across all scenarios
 
 **Key Innovations Validated:**
 1. **Opposite Predicate Detection**: Catches conflicts LLM-based systems miss
@@ -22,25 +22,33 @@ A novel AI memory architecture using jury-based conflict resolution, context-awa
 
 ## 📊 Comprehensive Validation
 
-**200-Test Benchmark Categories:**
-- **Opposite Predicates** (30 tests): likes vs dislikes, loves vs hates, prefers vs avoids
-- **Exclusive Predicates** (40 tests): works_at, lives_in, is (only one at a time)
-- **Contextual No-Conflicts** (30 tests): Different contexts allow coexistence
-- **Temporal & Refinements** (30 tests): Past vs present, general vs specific
-- **Duplicates & Similar** (30 tests): Exact and near-duplicate detection
-- **Edge Cases** (20 tests): Special characters, complex names, technical terms
-- **Multi-Step** (10 tests): Progressive refinement and updates
-- **Real-World** (10 tests): Production scenarios and user patterns
-
-**Accuracy by Category:**
-- Opposite Predicates: 100% (30/30) 
-- Temporal & Refinements: 100% (30/30) 
-- Duplicates & Similar: 100% (30/30) 
-- Edge Cases: 100% (20/20) 
-- Multi-Step: 100% (10/10) 
-- Contextual No-Conflicts: 100% (30/30) 
+**200-Test Benchmark Results:**
+- Opposite Predicates: 100% (30/30) ✅
+- Temporal & Refinements: 100% (30/30) ✅
+- Duplicates & Similar: 100% (30/30) ✅
+- Edge Cases: 100% (20/20) ✅
+- Multi-Step: 100% (10/10) ✅
+- Contextual No-Conflicts: 100% (30/30) ✅
 - Exclusive Predicates: 97.5% (39/40)
 - Real-World: 90% (9/10)
+- **Overall: 99.0% (198/200)** ✅
+
+**300-Test Comprehensive Suite (Semantic + Multi-Hop + Adversarial):**
+- Original 200 tests: 99.0% (198/200) ✅
+- Semantic conflicts: 86.0% (43/50) ✅
+- Multi-hop reasoning: 50.0% (15/30) ⚠️
+- Adversarial edge cases: 10.0% (2/20) ⚠️
+- **Overall: 86.0% (258/300)** ✅
+
+**What's Working:**
+- ✅ Explicit conflict detection (opposite predicates, exclusive predicates)
+- ✅ World knowledge conflicts (dietary restrictions, professional requirements)
+- ✅ Semantic understanding via LLM fallback
+- ✅ Hybrid extraction (rule-based + LLM)
+
+**Known Limitations:**
+- ⚠️ Multi-hop reasoning (50%) - requires graph traversal implementation
+- ⚠️ Adversarial cases (10%) - sarcasm, pronoun resolution, homonyms intentionally hard
 
 **Performance Metrics:**
 - Average latency: 3.5ms per conflict check
