@@ -1,0 +1,148 @@
+groups:
+  - name: lltm_system_alerts
+    interval: 30s
+    rules:
+      # High error rate
+      - alert: HighPipelineErrorRate
+        expr: rate(lltm_pipeline_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High pipeline error rate detected"
+          description: "Pipeline error rate is {{ $value }} errors/sec (threshold: 0.1)"
+      
+      # Slow pipeline
+      - alert: SlowPipelineProcessing
+        expr: histogram_quantile(0.95, rate(lltm_pipeline_duration_seconds_bucket[5m])) > 5.0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pipeline processing is slow"
+          description: "P95 pipeline duration is {{ $value }}s (threshold: 5s)"
+      
+      # High conflict rate
+      - alert: HighConflictRate
+        expr: rate(lltm_conflicts_found_total[5m]) > 1.0
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "High conflict detection rate"
+          description: "Conflict rate is {{ $value }} conflicts/sec (threshold: 1.0)"
+      
+      # Many weak memories
+      - alert: ManyWeakMemories
+        expr: sum(lltm_weak_memories_count) > 1000
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Many weak memories detected"
+          description: "{{ $value }} memories have stability < 50%"
+      
+      # High dissolution rate
+      - alert: HighDissolutionRate
+        expr: rate(lltm_dissolutions_total[5m]) > 0.5
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "High memory dissolution rate"
+          description: "Dissolution rate is {{ $value }} atoms/sec (threshold: 0.5)"
+      
+      # At-risk memories
+      - alert: AtRiskMemories
+        expr: sum(lltm_at_risk_memories_count) > 100
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Many memories at risk of dissolution"
+          description: "{{ $value }} memories are near dissolution"
+      
+      # Slow vector search
+      - alert: SlowVectorSearch
+        expr: histogram_quantile(0.95, rate(lltm_vector_search_duration_seconds_bucket[5m])) > 1.0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Vector similarity search is slow"
+          description: "P95 search duration is {{ $value }}s (threshold: 1s)"
+      
+      # System down
+      - alert: SystemDown
+        expr: up{job="lltm"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LTM system is down"
+          description: "The LTM system has been down for more than 1 minute"
+      
+      # Low reconsolidation rate
+      - alert: LowReconsolidationRate
+        expr: rate(lltm_reconsolidations_total[1h]) < 0.01
+        for: 2h
+        labels:
+          severity: info
+        annotations:
+          summary: "Low memory reconsolidation rate"
+          description: "Reconsolidation rate is {{ $value }} atoms/sec (very low activity)"
+      
+      # Unbalanced graph distribution
+      - alert: UnbalancedGraphDistribution
+        expr: |
+          sum(lltm_atoms_by_graph{graph_type="unsubstantiated"}) / 
+          sum(lltm_atoms_by_graph{graph_type="substantiated"}) > 2.0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Too many unsubstantiated atoms"
+          description: "Unsubstantiated/substantiated ratio is {{ $value }} (threshold: 2.0)"
+
+  - name: lltm_performance_alerts
+    interval: 30s
+    rules:
+      # High API latency
+      - alert: HighAPILatency
+        expr: histogram_quantile(0.95, rate(lltm_api_request_duration_seconds_bucket[5m])) > 2.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API latency detected"
+          description: "P95 API latency is {{ $value }}s (threshold: 2s)"
+      
+      # Slow extraction
+      - alert: SlowExtraction
+        expr: histogram_quantile(0.95, rate(lltm_extraction_duration_seconds_bucket[5m])) > 1.0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow extraction detected"
+          description: "P95 extraction duration is {{ $value }}s (threshold: 1s)"
+      
+      # Slow conflict detection
+      - alert: SlowConflictDetection
+        expr: histogram_quantile(0.95, rate(lltm_conflict_detection_duration_seconds_bucket[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow conflict detection"
+          description: "P95 conflict detection is {{ $value }}s (threshold: 0.5s)"
+      
+      # Slow decay processing
+      - alert: SlowDecayProcessing
+        expr: histogram_quantile(0.95, rate(lltm_decay_processing_duration_seconds_bucket[5m])) > 10.0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow decay processing"
+          description: "P95 decay processing is {{ $value }}s (threshold: 10s)"

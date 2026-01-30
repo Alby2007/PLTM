@@ -12,11 +12,18 @@ class AtomType(str, Enum):
     """Ontological categories for memory atoms"""
 
     ENTITY = "entity"
-    RELATION = "relation"
+    RELATION = "relation"  # Legacy - being phased out
     STATE = "state"
     EVENT = "event"
     HYPOTHESIS = "hypothesis"
     INVARIANT = "invariant"
+    
+    # New granular types (replacing broad RELATION)
+    AFFILIATION = "affiliation"  # works_at, studies_at, member_of
+    SOCIAL = "social"            # knows, reports_to, friends_with
+    PREFERENCE = "preference"    # likes, dislikes, prefers
+    BELIEF = "belief"            # thinks, believes, trusts
+    SKILL = "skill"              # can_do, proficient_in, learning
 
 
 class GraphType(str, Enum):

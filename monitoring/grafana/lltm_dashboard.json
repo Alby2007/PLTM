@@ -1,0 +1,154 @@
+{
+  "dashboard": {
+    "title": "Procedural LTM System - Overview",
+    "tags": ["lltm", "memory", "ai"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Pipeline Throughput",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(lltm_pipeline_requests_total[5m])",
+            "legendFormat": "Requests/sec"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Pipeline Duration (p95)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(lltm_pipeline_duration_seconds_bucket[5m]))",
+            "legendFormat": "p95 latency"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Atoms by Graph Type",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "sum(lltm_atoms_by_graph) by (graph_type)",
+            "legendFormat": "{{graph_type}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Atoms by Type",
+        "type": "piechart",
+        "targets": [
+          {
+            "expr": "sum(lltm_atoms_by_type) by (atom_type)",
+            "legendFormat": "{{atom_type}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      },
+      {
+        "id": 5,
+        "title": "Stability Distribution",
+        "type": "bargauge",
+        "targets": [
+          {
+            "expr": "sum(lltm_atoms_by_stability) by (stability_range)",
+            "legendFormat": "{{stability_range}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 6,
+        "title": "Weak & At-Risk Memories",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(lltm_weak_memories_count)",
+            "legendFormat": "Weak (<50%)"
+          },
+          {
+            "expr": "sum(lltm_at_risk_memories_count)",
+            "legendFormat": "At Risk"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      },
+      {
+        "id": 7,
+        "title": "Conflict Detection Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(lltm_conflicts_found_total[5m])",
+            "legendFormat": "{{conflict_type}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24}
+      },
+      {
+        "id": 8,
+        "title": "Semantic Similarity Distribution",
+        "type": "heatmap",
+        "targets": [
+          {
+            "expr": "rate(lltm_semantic_similarity_score_bucket[5m])",
+            "legendFormat": "{{le}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24}
+      },
+      {
+        "id": 9,
+        "title": "Decay Processing Stats",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(lltm_reconsolidations_total[5m])",
+            "legendFormat": "Reconsolidations/sec"
+          },
+          {
+            "expr": "rate(lltm_dissolutions_total[5m])",
+            "legendFormat": "Dissolutions/sec"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32}
+      },
+      {
+        "id": 10,
+        "title": "System Uptime",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "lltm_uptime_seconds",
+            "legendFormat": "Uptime (seconds)"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 12, "x": 12, "y": 32}
+      },
+      {
+        "id": 11,
+        "title": "Active Users",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "lltm_active_users",
+            "legendFormat": "Active Users"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 12, "x": 12, "y": 36}
+      }
+    ],
+    "refresh": "10s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    }
+  }
+}

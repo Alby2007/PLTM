@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with pgvector for vector embeddings
+  postgres:
+    image: ankane/pgvector:latest
+    container_name: lltm_postgres
+    environment:
+      POSTGRES_DB: lltm_vectors
+      POSTGRES_USER: lltm
+      POSTGRES_PASSWORD: lltm_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lltm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - lltm_network
+
+  # Redis for caching (future use)
+  redis:
+    image: redis:7-alpine
+    container_name: lltm_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - lltm_network
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+
+networks:
+  lltm_network:
+    driver: bridge
