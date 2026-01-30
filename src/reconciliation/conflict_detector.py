@@ -109,7 +109,7 @@ class ConflictDetector:
         """
         self.conflict_checks += 1
 
-        # STAGE 1: Identity match (exact subject + predicate)
+        # STAGE 1: Identity match (exact subject + predicate OR opposite predicate)
         logger.debug(
             "Stage 1: Finding atoms with subject={subject}, predicate={predicate}",
             subject=candidate.subject,
@@ -121,12 +121,23 @@ class ConflictDetector:
             candidate.predicate,
             exclude_historical=True,
         )
+        
+        # Also check for opposite predicates
+        opposite_pred = self._get_opposite_predicate(candidate.predicate)
+        if opposite_pred:
+            logger.debug(f"Stage 1: Also checking opposite predicate: {opposite_pred}")
+            opposite_matches = await self.store.find_by_triple(
+                candidate.subject,
+                opposite_pred,
+                exclude_historical=True,
+            )
+            matches.extend(opposite_matches)
 
         if not matches:
             logger.debug("No potential conflicts found (Stage 1)")
             return []
 
-        logger.debug(f"Stage 1: Found {len(matches)} atoms with same subject+predicate")
+        logger.debug(f"Stage 1: Found {len(matches)} atoms with same/opposite subject+predicate")
 
         # STAGE 2: Fuzzy object match (string similarity)
         # 
@@ -202,6 +213,16 @@ class ConflictDetector:
 
         return conflicts
 
+    def _get_opposite_predicate(self, predicate: str) -> str:
+        """Get the opposite predicate if one exists"""
+        pred_lower = predicate.lower()
+        for pos, neg in self.OPPOSITE_PREDICATES:
+            if pred_lower == pos:
+                return neg
+            if pred_lower == neg:
+                return pos
+        return None
+    
     def _calculate_similarity(self, text1: str, text2: str) -> float:
         """
         Calculate string similarity using SequenceMatcher.
@@ -222,12 +243,12 @@ class ConflictDetector:
         For MVP: Rule-based conflict detection.
         Future: LLM-based semantic analysis.
         """
-        # Check for opposite predicates
+        # Check for opposite predicates (exact match)
         pred1 = atom1.predicate.lower()
         pred2 = atom2.predicate.lower()
         
         for pos, neg in self.OPPOSITE_PREDICATES:
-            if (pos in pred1 and neg in pred2) or (neg in pred1 and pos in pred2):
+            if (pred1 == pos and pred2 == neg) or (pred1 == neg and pred2 == pos):
                 logger.debug(f"Opposite predicates detected: {pred1} vs {pred2}")
                 return True
 

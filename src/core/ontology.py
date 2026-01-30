@@ -22,14 +22,16 @@ ONTOLOGY_RULES: dict[AtomType, dict] = {
             "works_at", "works_for", "employed_by",
             "studies_at", "member_of", "part_of",
             "works_in",  # Location-based work
+            "lives_in",  # Residential location
         ],
-        "description": "Organizational affiliations",
+        "description": "Organizational affiliations and locations",
         "decay_rate": 0.03,  # Slow (jobs/schools change infrequently)
         "exclusive": True,   # Usually one job/school at a time
         "temporal": True,    # Track start/end dates
         "examples": [
             "[User] [works_at] [Anthropic]",
-            "[User] [studies_at] [Oxford]"
+            "[User] [studies_at] [Oxford]",
+            "[User] [lives_in] [Seattle]"
         ],
     },
     

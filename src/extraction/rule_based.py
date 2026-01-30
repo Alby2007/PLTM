@@ -31,8 +31,8 @@ class RuleBasedExtractor:
         # ========== SPECIFIC WORK/LOCATION ==========
         (r"I work (?:at|in|for) (.+?)(?:\.|,|$)", "works_at", AtomType.AFFILIATION),
         (r"I'm (?:a |an )?(.+?) at (.+?)(?:\.|,|$)", "works_at", AtomType.AFFILIATION),
-        (r"I (?:live|am) in (.+?)(?:\.|,|$)", "located_at", AtomType.ENTITY),
-        (r"I'm from (.+?)(?:\.|,|$)", "located_at", AtomType.ENTITY),
+        (r"I (?:live|am living) in (.+?)(?:\.|,|$)", "lives_in", AtomType.AFFILIATION),
+        (r"I'm from (.+?)(?:\.|,|$)", "lives_in", AtomType.AFFILIATION),
         
         # ========== STRONG PREFERENCES (SPECIFIC) ==========
         (r"I prefer (.+?)(?:\.|,|$)", "prefers", AtomType.PREFERENCE),
