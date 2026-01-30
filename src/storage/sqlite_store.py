@@ -507,3 +507,166 @@ class SQLiteGraphStore:
             session_id=metadata.get("session_id", ""),
             topic_cluster=metadata.get("topic_cluster"),
         )
+
+    # ========================================================================
+    # Convenience API Methods for Experiments
+    # ========================================================================
+
+    async def get_atoms_by_subject(
+        self,
+        subject: str,
+        graph: Optional[GraphType] = None
+    ) -> list[MemoryAtom]:
+        """
+        Get all atoms for a subject (user).
+        
+        This is a convenience method for experiments.
+        
+        Args:
+            subject: Subject identifier (usually user_id)
+            graph: Optional graph filter (SUBSTANTIATED, UNSUBSTANTIATED, HISTORICAL)
+        
+        Returns:
+            List of matching atoms
+        """
+        if graph is None:
+            # Get from both substantiated and unsubstantiated
+            substantiated = await self.get_substantiated_atoms(subject=subject)
+            unsubstantiated = await self.get_unsubstantiated_atoms(subject=subject)
+            return substantiated + unsubstantiated
+        elif graph == GraphType.SUBSTANTIATED:
+            return await self.get_substantiated_atoms(subject=subject)
+        elif graph == GraphType.UNSUBSTANTIATED:
+            return await self.get_unsubstantiated_atoms(subject=subject)
+        elif graph == GraphType.HISTORICAL:
+            if not self._conn:
+                raise RuntimeError("Database not connected")
+            cursor = await self._conn.execute(
+                "SELECT * FROM atoms WHERE subject = ? AND graph = 'historical'",
+                (subject,)
+            )
+            rows = await cursor.fetchall()
+            return [self._row_to_atom(row) for row in rows]
+        else:
+            return []
+
+    async def get_atoms_by_predicate(
+        self,
+        subject: str,
+        predicates: list[str],
+        graph: Optional[GraphType] = None
+    ) -> list[MemoryAtom]:
+        """
+        Get atoms matching specific predicates.
+        
+        Example: get_atoms_by_predicate("user_001", ["likes", "dislikes"])
+        
+        Args:
+            subject: Subject identifier
+            predicates: List of predicates to match
+            graph: Optional graph filter
+        
+        Returns:
+            List of matching atoms
+        """
+        all_atoms = await self.get_atoms_by_subject(subject, graph)
+        
+        return [
+            atom for atom in all_atoms
+            if atom.predicate in predicates
+        ]
+
+    async def get_atoms_by_type(
+        self,
+        subject: str,
+        atom_type: str,
+        graph: Optional[GraphType] = None
+    ) -> list[MemoryAtom]:
+        """
+        Get atoms of specific type.
+        
+        Example: get_atoms_by_type("user_001", AtomType.PREFERENCE)
+        
+        Args:
+            subject: Subject identifier
+            atom_type: Atom type to match (from AtomType enum)
+            graph: Optional graph filter
+        
+        Returns:
+            List of matching atoms
+        """
+        all_atoms = await self.get_atoms_by_subject(subject, graph)
+        
+        return [
+            atom for atom in all_atoms
+            if atom.atom_type == atom_type
+        ]
+
+    async def get_atoms_by_object_contains(
+        self,
+        subject: str,
+        object_substring: str,
+        graph: Optional[GraphType] = None
+    ) -> list[MemoryAtom]:
+        """
+        Get atoms where object contains substring.
+        
+        Example: get_atoms_by_object_contains("user_001", "Python")
+        
+        Args:
+            subject: Subject identifier
+            object_substring: Substring to search for in object field
+            graph: Optional graph filter
+        
+        Returns:
+            List of matching atoms
+        """
+        all_atoms = await self.get_atoms_by_subject(subject, graph)
+        
+        return [
+            atom for atom in all_atoms
+            if object_substring.lower() in atom.object.lower()
+        ]
+
+    async def get_all_atoms(
+        self,
+        subject: Optional[str] = None,
+        graph: Optional[GraphType] = None
+    ) -> list[MemoryAtom]:
+        """
+        Get all atoms (optionally filtered by subject/graph).
+        
+        Args:
+            subject: Optional subject filter
+            graph: Optional graph filter
+        
+        Returns:
+            List of all matching atoms
+        """
+        if subject:
+            return await self.get_atoms_by_subject(subject, graph)
+        
+        # Get everything
+        if graph == GraphType.SUBSTANTIATED:
+            return await self._get_all_from_graph("substantiated")
+        elif graph == GraphType.UNSUBSTANTIATED:
+            return await self._get_all_from_graph("unsubstantiated")
+        elif graph == GraphType.HISTORICAL:
+            return await self._get_all_from_graph("historical")
+        else:
+            sub = await self._get_all_from_graph("substantiated")
+            unsub = await self._get_all_from_graph("unsubstantiated")
+            return sub + unsub
+
+    async def _get_all_from_graph(self, graph_name: str) -> list[MemoryAtom]:
+        """Helper: Get all atoms from a specific graph."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+            
+        cursor = await self._conn.execute(
+            f"SELECT * FROM atoms WHERE graph = ?",
+            (graph_name,)
+        )
+        rows = await cursor.fetchall()
+        
+        return [self._row_to_atom(row) for row in rows]
