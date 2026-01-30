@@ -34,6 +34,10 @@ class RuleBasedExtractor:
         (r"I (?:live|am living) in (.+?)(?:\.|,|$)", "lives_in", AtomType.AFFILIATION),
         (r"I'm from (.+?)(?:\.|,|$)", "lives_in", AtomType.AFFILIATION),
         
+        # ========== MEDICAL/ATTRIBUTES ==========
+        (r"I am allergic to (.+?)(?:\.|,|$)", "allergic_to", AtomType.ENTITY),
+        (r"I'm allergic to (.+?)(?:\.|,|$)", "allergic_to", AtomType.ENTITY),
+        
         # ========== STRONG PREFERENCES (SPECIFIC) ==========
         (r"I prefer (.+?)(?:\.|,|$)", "prefers", AtomType.PREFERENCE),
         (r"I (?:really )?love (.+?)(?:\.|,|$)", "likes", AtomType.PREFERENCE),

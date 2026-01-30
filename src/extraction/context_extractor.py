@@ -20,6 +20,7 @@ class ContextExtractor:
         (r"during (\w+(?:\s+\w+){0,2})", "temporal"),
         (r"at (night|work|home|school)", "temporal"),
         (r"in the (morning|evening|afternoon)", "temporal"),
+        (r"in (morning|evening|afternoon)", "temporal"),  # Without "the"
         
         # Conditional: "if X", "while X"
         (r"if (\w+(?:\s+\w+){0,2})", "conditional"),
@@ -29,6 +30,9 @@ class ContextExtractor:
         (r"at (work|home|school|office|parties|the office)", "situational"),
         (r"for (work|fun|leisure|business)", "situational"),
         (r"when (coding|learning|relaxing|working|exercising)", "situational"),
+        
+        # Purpose/Use case: "for X" (broader pattern for any purpose)
+        (r"for ([a-zA-Z]+(?:\s+[a-zA-Z]+){0,2})", "purpose"),
     ]
 
     def extract(self, text: str) -> List[str]:

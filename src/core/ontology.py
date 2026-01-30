@@ -7,13 +7,18 @@ from src.core.models import AtomType, MemoryAtom
 # Improved ontology with granular types and type-specific rules
 ONTOLOGY_RULES: dict[AtomType, dict] = {
     AtomType.ENTITY: {
-        "allowed_predicates": ["is", "named", "type_of"],
-        "description": "Core identity facts",
+        "allowed_predicates": [
+            "is", "named", "called",
+            "has_property", "characterized_by",
+            "allergic_to",  # Medical attributes
+        ],
+        "description": "Identity and attributes",
         "decay_rate": 0.01,  # Very slow (identity rarely changes)
-        "exclusive": True,   # Can only 'is' one thing at a time (with context)
+        "exclusive": False,  # Can have multiple attributes (e.g., multiple allergies)
         "examples": [
             "[User] [is] [software engineer]",
-            "[User] [named] [Alby]"
+            "[User] [named] [Alby]",
+            "[User] [allergic_to] [peanuts]"
         ],
     },
     
