@@ -77,16 +77,6 @@ python generate_200_tests.py
 - ✅ **Transparent**: All test code is public
 - ✅ **Grounded**: 50% from published benchmarks, 50% from real-world scenarios
 
-### Independent Validation
-
-We welcome independent verification! Run the benchmark and report your results:
-
-| Date | User | System | Result | Status |
-|------|------|--------|--------|--------|
-| 2026-01-30 | @creator | Windows 11 | 10/10 (100%) | ✅ Verified |
-| TBD | Your name | Your system | TBD | Open for validation |
-
-[Open an issue to add your validation results →](https://github.com/yourusername/procedural-ltm/issues)
 
 ## Quick Start
 
@@ -262,4 +252,4 @@ MIT
 
 ## Author
 
-Alby (@AlbySystems) - January 2026
+Alby (@Alby2007) - January 2026
