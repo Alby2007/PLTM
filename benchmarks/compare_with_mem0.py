@@ -35,14 +35,29 @@ class Mem0Adapter:
         """Initialize Mem0 (requires API key or local setup)"""
         try:
             from mem0 import Memory
+            import os
+            
+            # Check for API key
+            if not os.getenv("OPENAI_API_KEY"):
+                print("⚠️  Mem0 requires OPENAI_API_KEY environment variable")
+                print("   Set it with: $env:OPENAI_API_KEY='your-key-here'")
+                print("   Or run in mock mode (see benchmarks/README.md)")
+                self.available = False
+                self.mock_mode = True
+                return
+            
             self.memory = Memory()
             self.available = True
+            self.mock_mode = False
         except ImportError:
             print("⚠️  Mem0 not installed. Run: pip install mem0ai")
             self.available = False
+            self.mock_mode = True
         except Exception as e:
             print(f"⚠️  Mem0 initialization failed: {e}")
+            print("   Running in mock mode for demonstration")
             self.available = False
+            self.mock_mode = True
     
     async def test_conflict_detection(
         self,
