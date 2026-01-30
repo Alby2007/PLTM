@@ -1,0 +1,473 @@
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lltm-production
+
+---
+# ConfigMap for application configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lltm-config
+  namespace: lltm-production
+data:
+  NEO4J_URI: "bolt://neo4j:7687"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "lltm_vectors"
+  CELERY_BROKER_URL: "redis://redis:6379/0"
+  CELERY_RESULT_BACKEND: "redis://redis:6379/0"
+  LOG_LEVEL: "INFO"
+  PROMETHEUS_ENABLED: "true"
+
+---
+# Secret for sensitive data
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lltm-secrets
+  namespace: lltm-production
+type: Opaque
+stringData:
+  JWT_SECRET_KEY: "change-this-in-production-use-strong-secret"
+  NEO4J_PASSWORD: "change-this-password"
+  POSTGRES_PASSWORD: "change-this-password"
+
+---
+# API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lltm-api
+  namespace: lltm-production
+  labels:
+    app: lltm-api
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: lltm-api
+  template:
+    metadata:
+      labels:
+        app: lltm-api
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: lltm-api
+        image: lltm/api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        env:
+        - name: NEO4J_URI
+          valueFrom:
+            configMapKeyRef:
+              name: lltm-config
+              key: NEO4J_URI
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: lltm-config
+              key: REDIS_HOST
+        - name: JWT_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: lltm-secrets
+              key: JWT_SECRET_KEY
+        - name: NEO4J_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: lltm-secrets
+              key: NEO4J_PASSWORD
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+---
+# API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: lltm-api
+  namespace: lltm-production
+  labels:
+    app: lltm-api
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: lltm-api
+
+---
+# Celery Worker Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lltm-celery-worker
+  namespace: lltm-production
+  labels:
+    app: lltm-celery-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: lltm-celery-worker
+  template:
+    metadata:
+      labels:
+        app: lltm-celery-worker
+    spec:
+      containers:
+      - name: celery-worker
+        image: lltm/api:latest
+        command: ["celery", "-A", "src.workers.celery_app", "worker", "--loglevel=info"]
+        envFrom:
+        - configMapRef:
+            name: lltm-config
+        env:
+        - name: NEO4J_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: lltm-secrets
+              key: NEO4J_PASSWORD
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+
+---
+# Celery Beat Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lltm-celery-beat
+  namespace: lltm-production
+  labels:
+    app: lltm-celery-beat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lltm-celery-beat
+  template:
+    metadata:
+      labels:
+        app: lltm-celery-beat
+    spec:
+      containers:
+      - name: celery-beat
+        image: lltm/api:latest
+        command: ["celery", "-A", "src.workers.celery_app", "beat", "--loglevel=info"]
+        envFrom:
+        - configMapRef:
+            name: lltm-config
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+---
+# Neo4j StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: neo4j
+  namespace: lltm-production
+spec:
+  serviceName: neo4j
+  replicas: 1
+  selector:
+    matchLabels:
+      app: neo4j
+  template:
+    metadata:
+      labels:
+        app: neo4j
+    spec:
+      containers:
+      - name: neo4j
+        image: neo4j:5.15
+        ports:
+        - containerPort: 7474
+          name: http
+        - containerPort: 7687
+          name: bolt
+        env:
+        - name: NEO4J_AUTH
+          value: "neo4j/$(NEO4J_PASSWORD)"
+        - name: NEO4J_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: lltm-secrets
+              key: NEO4J_PASSWORD
+        - name: NEO4J_PLUGINS
+          value: '["apoc"]'
+        volumeMounts:
+        - name: neo4j-data
+          mountPath: /data
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+  volumeClaimTemplates:
+  - metadata:
+      name: neo4j-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 50Gi
+
+---
+# Neo4j Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: neo4j
+  namespace: lltm-production
+spec:
+  type: ClusterIP
+  ports:
+  - port: 7474
+    name: http
+  - port: 7687
+    name: bolt
+  selector:
+    app: neo4j
+
+---
+# Redis Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: lltm-production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+        command: ["redis-server", "--appendonly", "yes"]
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+      volumes:
+      - name: redis-data
+        persistentVolumeClaim:
+          claimName: redis-pvc
+
+---
+# Redis Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: lltm-production
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6379
+  selector:
+    app: redis
+
+---
+# Redis PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+  namespace: lltm-production
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# PostgreSQL StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: lltm-production
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: ankane/pgvector:latest
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: lltm-config
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          value: "lltm"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: lltm-secrets
+              key: POSTGRES_PASSWORD
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 50Gi
+
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: lltm-production
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+  selector:
+    app: postgres
+
+---
+# Horizontal Pod Autoscaler for API
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: lltm-api-hpa
+  namespace: lltm-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: lltm-api
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lltm-ingress
+  namespace: lltm-production
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+  - hosts:
+    - api.lltm.example.com
+    secretName: lltm-tls
+  rules:
+  - host: api.lltm.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: lltm-api
+            port:
+              number: 8000
