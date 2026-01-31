@@ -19,7 +19,7 @@ from enum import Enum
 
 from loguru import logger
 
-from src.core.models import AtomType
+from src.core.models import AtomType, GraphType
 from src.pipeline.memory_pipeline import MemoryPipeline
 
 
@@ -209,9 +209,9 @@ class AdaptivePromptSystem:
             return self._expertise_cache
         
         # Get expertise indicators from memory
-        atoms = await self.pipeline.store.find_by_triple(
+        atoms = await self.pipeline.store.get_atoms_by_subject(
             subject=self.user_id,
-            exclude_historical=True
+            graph=GraphType.SUBSTANTIATED
         )
         
         # Count expertise signals
@@ -257,9 +257,9 @@ class AdaptivePromptSystem:
             return self._style_cache
         
         # Get style indicators from memory
-        atoms = await self.pipeline.store.find_by_triple(
+        atoms = await self.pipeline.store.get_atoms_by_subject(
             subject=self.user_id,
-            exclude_historical=True
+            graph=GraphType.SUBSTANTIATED
         )
         
         # Count style signals
@@ -307,9 +307,9 @@ class AdaptivePromptSystem:
             return self._preferences_cache
         
         # Get preference atoms
-        atoms = await self.pipeline.store.find_by_triple(
+        atoms = await self.pipeline.store.get_atoms_by_subject(
             subject=self.user_id,
-            exclude_historical=True
+            graph=GraphType.SUBSTANTIATED
         )
         
         # Filter for preferences
@@ -338,9 +338,9 @@ class AdaptivePromptSystem:
         # In a real implementation, you'd use semantic search
         # For now, return recent relevant atoms
         
-        atoms = await self.pipeline.store.find_by_triple(
+        atoms = await self.pipeline.store.get_atoms_by_subject(
             subject=self.user_id,
-            exclude_historical=True
+            graph=GraphType.SUBSTANTIATED
         )
         
         # Simple keyword matching (would use embeddings in production)

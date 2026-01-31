@@ -66,8 +66,8 @@ async def test_multi_agent(pipeline: MemoryPipeline) -> bool:
         
         # Add agents
         print("👥 Adding agents...")
-        await workspace.add_agent("researcher", "Research specialist")
-        await workspace.add_agent("writer", "Content writer")
+        await workspace.add_agent("researcher", "Research specialist", ["research", "analysis"])
+        await workspace.add_agent("writer", "Content writer", ["writing", "editing"])
         
         assert len(workspace.agents) == 2
         print(f"✅ {len(workspace.agents)} agents added to workspace")
@@ -94,12 +94,12 @@ async def test_adaptive_prompts(pipeline: MemoryPipeline) -> bool:
         await process_message_fully(pipeline, user_id, "I prefer concise explanations")
         
         # Generate prompt
-        prompt = await prompt_system.generate_adaptive_prompt(
-            task="explain recursion",
-            domain="programming"
+        prompt = await prompt_system.generate_prompt(
+            task="explain recursion"
         )
         
-        assert prompt.base_prompt is not None
+        assert isinstance(prompt, str)
+        assert len(prompt) > 0
         print(f"✅ Generated adaptive prompt")
         
         return True

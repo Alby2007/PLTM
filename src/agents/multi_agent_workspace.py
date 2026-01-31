@@ -100,10 +100,11 @@ class SharedMemoryWorkspace:
         self.agents[agent_id] = profile
         
         # Store agent metadata in shared memory
-        await self.pipeline.process(
-            user_id=f"workspace_{self.workspace_id}",
-            message=f"Agent {agent_id} joined with role: {role}. Capabilities: {', '.join(capabilities)}"
-        )
+        async for _ in self.pipeline.process_message(
+            message=f"Agent {agent_id} joined with role: {role}. Capabilities: {', '.join(capabilities)}",
+            user_id=f"workspace_{self.workspace_id}"
+        ):
+            pass  # Consume async generator
         
         logger.info(f"Agent {agent_id} ({role}) joined workspace {self.workspace_id}")
         
@@ -130,10 +131,11 @@ class SharedMemoryWorkspace:
             raise ValueError(f"Agent {agent_id} not registered in workspace")
         
         # Store contribution in shared memory
-        await self.pipeline.process(
-            user_id=f"workspace_{self.workspace_id}",
-            message=f"[{self.agents[agent_id].role}] {contribution}"
-        )
+        async for _ in self.pipeline.process_message(
+            message=f"[{self.agents[agent_id].role}] {contribution}",
+            user_id=f"workspace_{self.workspace_id}"
+        ):
+            pass  # Consume async generator
         
         # Track contribution
         self.agents[agent_id].contributions.append(contribution)

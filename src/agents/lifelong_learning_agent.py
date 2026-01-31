@@ -19,7 +19,7 @@ from datetime import datetime
 
 from loguru import logger
 
-from src.core.models import MemoryAtom, AtomType
+from src.core.models import MemoryAtom, AtomType, GraphType
 from src.storage.sqlite_store import SQLiteGraphStore
 from src.extraction.rule_based import RuleBasedExtractor
 from src.pipeline.memory_pipeline import MemoryPipeline
@@ -87,9 +87,9 @@ class LifelongLearningAgent:
         
         # Get all non-historical atoms for this user
         # In a production system, you'd use semantic search here
-        atoms = await self.pipeline.store.find_by_triple(
+        atoms = await self.pipeline.store.get_atoms_by_subject(
             subject=self.user_id,
-            exclude_historical=True
+            graph=GraphType.SUBSTANTIATED
         )
         
         # Filter by confidence
@@ -100,7 +100,7 @@ class LifelongLearningAgent:
         
         # Sort by confidence and recency
         relevant_atoms.sort(
-            key=lambda a: (a.confidence, a.created_at),
+            key=lambda a: (a.confidence, a.first_observed),
             reverse=True
         )
         
@@ -114,8 +114,8 @@ class LifelongLearningAgent:
                 'statement': f"{atom.subject} {atom.predicate} {atom.object}",
                 'confidence': atom.confidence,
                 'type': atom.atom_type.value,
-                'created_at': atom.created_at.isoformat() if atom.created_at else None,
-                'context': atom.context,
+                'created_at': atom.first_observed.isoformat() if atom.first_observed else None,
+                'contexts': atom.contexts,
             })
         
         logger.debug(
