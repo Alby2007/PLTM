@@ -117,6 +117,32 @@ class MemoryAtom(BaseModel):
     """
     Fundamental unit of procedural long-term memory.
     Represents a semantic triple (Subject, Predicate, Object).
+    
+    Enhanced with explicit epistemic modeling to track WHO believes WHAT
+    with WHAT certainty, avoiding ambiguity in belief attribution.
+    
+    Examples:
+        # Direct belief: "I think Bob will get a job"
+        MemoryAtom(
+            subject="Bob",
+            predicate="will_get",
+            object="job",
+            source_user="user_123",      # WHO stated this
+            confidence=0.7,               # THEIR certainty
+            belief_holder="user_123",     # WHO holds the belief
+            epistemic_distance=0          # Direct belief
+        )
+        
+        # Reported belief: "Mary thinks Bob will get a job"
+        MemoryAtom(
+            subject="Bob",
+            predicate="will_get",
+            object="job",
+            source_user="user_123",       # User told us
+            confidence=0.6,                # Lower (secondhand)
+            belief_holder="Mary",          # Mary holds the belief
+            epistemic_distance=1           # One level removed
+        )
     """
 
     # ========== IDENTITY ==========
@@ -133,6 +159,12 @@ class MemoryAtom(BaseModel):
     # ========== CONTEXTUAL QUALIFIERS ==========
     contexts: list[str] = Field(default_factory=list)
     temporal_validity: Optional[dict[str, datetime]] = None
+
+    # ========== EPISTEMIC MODELING ==========
+    # Explicit tracking of WHO believes WHAT with WHAT certainty
+    source_user: str = ""                           # WHO stated/observed this
+    belief_holder: Optional[str] = None             # WHO holds the belief (if different from source)
+    epistemic_distance: int = 0                     # How many levels removed (0=direct, 1=reported, etc.)
 
     # ========== EVIDENCE TRACKING ==========
     provenance: Provenance

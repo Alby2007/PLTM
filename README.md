@@ -58,6 +58,44 @@ facts = await store.get_atoms_by_subject("alice")
 
 ---
 
+## ⚠️ Common Misconceptions
+
+### "This is just RAG"
+**No.** RAG = Retrieval-Augmented Generation (retrieve docs to answer questions)  
+This system = **Conflict resolution for storing facts**
+
+### "The judges are agents"  
+**No.** Agents have autonomy and goals (plan, act, learn)  
+Judges are **validators with constrained output** (approve/reject)
+
+### "This is prompt engineering"
+**No.** Prompt engineering = crafting better prompts for LLMs  
+This system = **Production infrastructure with grammar-constrained validation**
+
+### What This Actually Is
+A **conflict resolution system** that:
+1. Detects when facts contradict (opposite predicates, exclusive predicates, multi-hop reasoning)
+2. Uses specialized validators (not agents) to deliberate
+3. Resolves conflicts intelligently (temporal supersession, context-aware reconciliation)
+4. Maintains consistent memory state (dual-graph architecture)
+
+**Test it yourself:**
+```bash
+# Run 200-test core benchmark (99% accuracy)
+python run_200_test_benchmark.py
+
+# Run 300-test comprehensive suite (86% accuracy)
+python run_300_comprehensive_benchmark.py
+
+# Count tests with pytest
+python -m pytest tests/benchmarks/ --collect-only
+# Shows: 102 tests collected
+```
+
+Numbers don't lie. All tests are public and reproducible.
+
+---
+
 ## 🎉 Detailed Results
 
 **Benchmark Performance:**
