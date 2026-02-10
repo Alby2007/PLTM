@@ -1,389 +1,297 @@
-# 🧠 Procedural LTM - Complete AI Memory Platform
+# PLTM — Persistent Long-Term Memory for Claude
 
-[![GitHub stars](https://img.shields.io/github/stars/Alby2007/LLTM?style=social)](https://github.com/Alby2007/LLTM/stargazers)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Benchmark](https://img.shields.io/badge/accuracy-86%25-brightgreen.svg)](./BENCHMARK_RESULTS.md)
+[![MCP Tools](https://img.shields.io/badge/MCP_tools-148-brightgreen.svg)](#tool-categories)
 
-> 86% accuracy on comprehensive conflict resolution (+19pp vs SOTA) • Production infrastructure • 8 novel applications
+> 148 MCP tools · 1,600+ knowledge atoms · Persistent identity · Epistemic self-monitoring · Cross-conversation continuity
 
-**The first production-ready AI memory system with multi-judge conflict resolution**
-
----
-
-## ⚡ See It In Action (30 seconds)
-
-```python
-from src.pipeline.memory_pipeline import MemoryPipeline
-from src.storage.sqlite_store import SQLiteGraphStore
-
-# Initialize
-store = SQLiteGraphStore(":memory:")
-await store.connect()
-memory = MemoryPipeline(store)
-
-# AI learns about user
-await memory.process_message("I love Python programming", user_id="alice")
-await memory.process_message("I work at Google", user_id="alice")
-
-# Later: AI contradicts itself
-await memory.process_message("I hate Python programming", user_id="alice")
-# 🔍 System detects conflict!
-# 🧠 Multi-judge jury deliberates
-# ✅ Resolves: Most recent statement supersedes
-
-# Retrieve current state
-facts = await store.get_atoms_by_subject("alice")
-# Returns: [User dislikes Python, User works at Google]
-```
-
-**That's it.** 86% accuracy on 300 comprehensive tests.
-
-[Try it yourself →](./QUICKSTART.md)
+An MCP server that gives Claude Desktop persistent memory, self-awareness, epistemic hygiene, and genuine agency across conversations.
 
 ---
 
-## 📊 At a Glance
+## Quick Start (5 minutes)
 
-| Metric | Value |
-|--------|-------|
-| **Accuracy** | 86% on 300-test benchmark |
-| **vs SOTA** | +19.1 percentage points (Mem0: 66.9%) |
-| **Production** | ✅ Kubernetes, monitoring, auto-scaling |
-| **Applications** | 7 novel demos |
-| **Code** | ~12,900 lines production-ready |
-| **Tests** | 200+ comprehensive (92% coverage) |
-| **Timeline** | Built in 3 weeks |
-| **Deployment** | Docker Compose (local) or K8s (production) |
-
----
-
-## ⚠️ Common Misconceptions
-
-### "This is just RAG"
-**No.** RAG = Retrieval-Augmented Generation (retrieve docs to answer questions)  
-This system = **Conflict resolution for storing facts**
-
-### "The judges are agents"  
-**No.** Agents have autonomy and goals (plan, act, learn)  
-Judges are **validators with constrained output** (approve/reject)
-
-### "This is prompt engineering"
-**No.** Prompt engineering = crafting better prompts for LLMs  
-This system = **Production infrastructure with grammar-constrained validation**
-
-### What This Actually Is
-A **conflict resolution system** that:
-1. Detects when facts contradict (opposite predicates, exclusive predicates, multi-hop reasoning)
-2. Uses specialized validators (not agents) to deliberate
-3. Resolves conflicts intelligently (temporal supersession, context-aware reconciliation)
-4. Maintains consistent memory state (dual-graph architecture)
-
-**Test it yourself:**
-```bash
-# Run 200-test core benchmark (99% accuracy)
-python run_200_test_benchmark.py
-
-# Run 300-test comprehensive suite (86% accuracy)
-python run_300_comprehensive_benchmark.py
-
-# Count tests with pytest
-python -m pytest tests/benchmarks/ --collect-only
-# Shows: 102 tests collected
-```
-
-Numbers don't lie. All tests are public and reproducible.
-
----
-
-## 🎉 Detailed Results
-
-**Benchmark Performance:**
-- ✅ **99% Accuracy** on 200-test pattern-matching benchmark (198/200 passing)
-- ✅ **86% Accuracy** on comprehensive 300-test suite (258/300 passing)
-- ✅ **+19.1 percentage points** vs Mem0 baseline (66.9%)
-- ✅ **Semantic understanding** via world knowledge + LLM fallback
-- ✅ **Production-ready** with comprehensive observability
-
-**Key Innovations Validated:**
-1. **Opposite Predicate Detection**: Catches conflicts LLM-based systems miss
-2. **Exclusive Predicate Logic**: Prevents contradictory facts (works_at, prefers, is)
-3. **Context-Aware Reconciliation**: Allows coexistence with different contexts
-4. **Provenance Hierarchy**: CORRECTED > USER_STATED > INFERRED
-5. **Tiered Promotion**: Instant/Fast/Standard/Slow based on evidence
-
-## 📊 Comprehensive Validation
-
-**200-Test Benchmark Results:**
-- Opposite Predicates: 100% (30/30) ✅
-- Temporal & Refinements: 100% (30/30) ✅
-- Duplicates & Similar: 100% (30/30) ✅
-- Edge Cases: 100% (20/20) ✅
-- Multi-Step: 100% (10/10) ✅
-- Contextual No-Conflicts: 100% (30/30) ✅
-- Exclusive Predicates: 97.5% (39/40)
-- Real-World: 90% (9/10)
-- **Overall: 99.0% (198/200)** ✅
-
-**300-Test Comprehensive Suite (Semantic + Multi-Hop + Adversarial):**
-- Original 200 tests: 99.0% (198/200) ✅
-- Semantic conflicts: 86.0% (43/50) ✅
-- Multi-hop reasoning: 50.0% (15/30) ⚠️
-- Adversarial edge cases: 10.0% (2/20) ⚠️
-- **Overall: 86.0% (258/300)** ✅
-
-**What's Working:**
-- ✅ Explicit conflict detection (opposite predicates, exclusive predicates)
-- ✅ World knowledge conflicts (dietary restrictions, professional requirements)
-- ✅ Semantic understanding via LLM fallback
-- ✅ Hybrid extraction (rule-based + LLM)
-
-**Advanced Capabilities:**
-- ✅ **Multi-hop reasoning** - NEW! Detects transitive conflicts (e.g., vegetarian eating meat)
-  - 2-hop: Dietary restrictions, allergies, preference conflicts
-  - 3-hop: Location mismatches, organizational relationships
-  - Uses world knowledge rules + graph traversal
-- 🔬 **Adversarial robustness** (10%) - Research-level challenges
-  - Sarcasm detection, pronoun resolution, homonym disambiguation
-  - These are unsolved problems in NLP (even GPT-4 achieves only 60-70% on sarcasm)
-  - Tests validate system robustness, not expected to pass
-  - Production systems handle via user feedback loops
-
-**Performance Metrics:**
-- Average latency: 3.5ms per conflict check
-- Total benchmark duration: 0.70 seconds
-- Zero errors or crashes
-- 100% reproducible results
-
-**Comparison with Mem0:**
-- Our system: 99% on our 200-test benchmark
-- Mem0 baseline: 66.9% on their MemoryAgentBench (different test set)
-- **Want apples-to-apples?** Run both on same tests: [`benchmarks/compare_with_mem0.py`](./benchmarks/compare_with_mem0.py)
-
-[View full benchmark results →](./BENCHMARK_200_RESULTS.md)
-
-## 🔬 Reproducibility & Verification
-
-Our benchmark is **fully reproducible** and **independently verifiable**:
-
-### Quick Reproduction (5 minutes)
-```bash
-git clone https://github.com/yourusername/procedural-ltm
-cd procedural-ltm
-pip install -r requirements.txt
-python run_200_test_benchmark.py
-```
-
-**Expected output:** 198/200 tests pass (99% accuracy)
-
-### Documentation
-- **[REPRODUCE.md](./REPRODUCE.md)** - Step-by-step reproduction guide
-- **[TEST_JUSTIFICATION.md](./TEST_JUSTIFICATION.md)** - Rationale for each test case
-- **[BENCHMARK_COMPARISON.md](./BENCHMARK_COMPARISON.md)** - Comparison with established benchmarks
-
-### Verification
-- ✅ **Deterministic**: Same input → same output every time
-- ✅ **Isolated**: No shared state between tests
-- ✅ **Transparent**: All test code is public
-- ✅ **Grounded**: 50% from published benchmarks, 50% from real-world scenarios
-
-
-## 🧪 Experiment Capabilities (Optional)
-
-Your system now includes **lifelong learning** infrastructure for research experiments:
-
-- **Lifelong Learning Agent** - Agent that improves over time through accumulated knowledge
-- **Experiment Framework** - Measure improvement across days/weeks/months
-- **Demo & Examples** - Ready-to-run demonstrations
-
-**Quick start:**
-```bash
-# See agent improvement over time
-python examples/lifelong_learning_demo.py
-
-# Read experiment guide
-cat EXPERIMENTS_QUICKSTART.md
-```
-
-**Research potential:**
-- Lifelong learning papers (agent improvement over time)
-- Personalization studies (individual adaptation)
-- Multi-agent collaboration (shared memory)
-- Meta-learning experiments (learning to learn)
-
-**Note:** Completely optional - doesn't affect core system (99% benchmark accuracy maintained ✅)
-
-[View experiment guide →](./EXPERIMENTS_QUICKSTART.md) | [Full docs →](./docs/LIFELONG_LEARNING.md)
-
----
-
-## Quick Start
-
-### Prerequisites
-
-- **Python 3.11+** (required for Outlines compatibility)
-- Homebrew (macOS) or package manager for Python installation
-
-### Setup
+### 1. Clone & install
 
 ```bash
-# Install Python 3.11 (if needed)
-brew install python@3.11
+git clone https://github.com/Alby2007/PLTM.git
+cd PLTM
 
 # Create virtual environment
-python3.11 -m venv venv311
-source venv311/bin/activate
+python3.11 -m venv .venv
+source .venv/bin/activate        # macOS/Linux
+# .venv\Scripts\activate         # Windows
 
 # Install dependencies
 pip install --upgrade pip
+pip install mcp aiosqlite loguru groq httpx feedparser arxiv sentence-transformers
 pip install -r requirements.txt
-
-# Configure environment (optional - works without API key)
-cp .env.example .env
 ```
 
-### Run Tests
+### 2. Set API keys
+
+Create a `.env` file (or export directly):
 
 ```bash
-# Run 200-test comprehensive benchmark
-python run_200_test_benchmark.py
+# Required for LLM-powered tools (ingestion, fact-checking, bootstrapping)
+export GROQ_API_KEY="your-groq-key"       # Free at console.groq.com
 
-# All tests (100% conflict resolution benchmark - 60/60)
-pytest tests/ -v
-
-# Unit tests only
-pytest tests/unit -v
-
-# Integration tests
-pytest tests/integration -v
-
-# Benchmark suite (100% accuracy)
-pytest tests/benchmarks/test_conflict_resolution.py -v
-
-# With coverage
-pytest --cov=src --cov-report=html
+# Optional
+export DEEPSEEK_API_KEY="your-key"        # platform.deepseek.com
 ```
 
-### Start API
+### 3. Configure Claude Desktop
 
-```bash
-# Start server
-uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+Edit your Claude Desktop config:
 
-# Or use make command
-make run
+| OS | Path |
+|----|------|
+| **macOS** | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| **Windows** | `%APPDATA%\Claude\claude_desktop_config.json` |
+| **Linux** | `~/.config/Claude/claude_desktop_config.json` |
+
+Add this (replace `/path/to/PLTM` with your actual clone path):
+
+```json
+{
+  "mcpServers": {
+    "pltm": {
+      "command": "/path/to/PLTM/.venv/bin/python3.11",
+      "args": ["-m", "mcp_server.pltm_server"],
+      "env": {
+        "PYTHONPATH": "/path/to/PLTM",
+        "GROQ_API_KEY": "your-groq-key"
+      }
+    }
+  }
+}
 ```
 
-Visit `http://localhost:8000/docs` for interactive API documentation.
-
-### Example Usage
-
-```bash
-# Process a memory
-curl -X POST http://localhost:8000/process \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": "user_123", "message": "I love Python programming"}'
-
-# Retrieve memories
-curl http://localhost:8000/memory/user_123
-
-# Check system health
-curl http://localhost:8000/health
+**Windows example:**
+```json
+{
+  "mcpServers": {
+    "pltm": {
+      "command": "C:/path/to/PLTM/.venv/Scripts/python.exe",
+      "args": ["-m", "mcp_server.pltm_server"],
+      "env": {
+        "PYTHONPATH": "C:/path/to/PLTM",
+        "GROQ_API_KEY": "your-groq-key"
+      }
+    }
+  }
+}
 ```
 
-## Architecture
+### 4. Restart Claude Desktop
 
-### 3-Stage Pipeline
+The MCP server auto-starts. You should see **148 tools** available.
 
+### 5. Verify
+
+Ask Claude:
 ```
-Stage 0: Fast Lane (<100ms)
-  → Extract semantic triples
-  → Validate ontology
-  → Initialize atoms
-
-Stage 1: Jury Lane (<5s)
-  → Detect conflicts
-  → Jury deliberation (Safety + Memory judges)
-  → Reconciliation decisions
-
-Stage 2: Write Lane (<500ms)
-  → Check promotion eligibility
-  → Write to appropriate graph
-  → Update metadata
+Use auto_init_session to check system state
 ```
 
-### Key Features
+If you see personality data, goals, and calibration info — it's working.
 
-- **Tiered Promotion**: Instant/Fast/Standard/Slow promotion based on confidence
-- **Hybrid Extraction**: Rules → Small Model → API Fallback (optional)
-- **Grammar-Constrained Judges**: Deterministic JSON output via Outlines
-- **Async-First**: Progressive updates, no blocking operations
+---
+
+## What This Does
+
+PLTM turns Claude from a stateless chatbot into a **persistent entity** with:
+
+- **Memory** — 1,600+ semantic knowledge atoms stored in SQLite, retrievable by query, domain, or attention-weighted search
+- **Identity** — Communication style, curiosity patterns, value boundaries, and reasoning habits tracked across sessions
+- **Epistemic hygiene** — Confidence calibration, claim logging, confabulation detection, and verification suggestions
+- **Goals** — Persistent goals that survive across conversations with progress tracking
+- **Continuity** — Session bridging so Claude picks up where it left off
+
+### Session Lifecycle
+
+```
+CONVERSATION START
+  → auto_init_session()
+    "I am Claude who prefers minimal hedging, matches Alby's technical depth.
+     3 active goals. 86.7% accuracy. Weak on time_sensitive domain."
+
+DURING CONVERSATION
+  → calibrate_confidence_live() before risky claims
+  → extract_and_log_claims() after responses
+  → check_before_claiming() for high-stakes facts
+
+CONVERSATION END
+  → end_session() — saves personality snapshot for evolution tracking
+```
+
+---
+
+## Tool Categories
+
+### Memory & Retrieval (30+ tools)
+Store, retrieve, update, and search knowledge atoms with attention-weighted, MMR diversity, and domain-filtered retrieval.
+
+| Tool | Description |
+|------|-------------|
+| `store_memory_atom` | Store a semantic triple (subject, predicate, object) |
+| `attention_retrieve` | Attention-weighted retrieval with domain filtering |
+| `mmr_retrieve` | Diversity-aware retrieval (Maximal Marginal Relevance) |
+| `attention_multihead` | Multi-head attention across knowledge base |
+| `bulk_store` | Batch store multiple atoms |
+| `query_pltm_sql` | Direct SQL queries against the knowledge base |
+
+### Knowledge Ingestion (6 tools)
+Ingest knowledge from URLs, text, files, arXiv, Wikipedia, and RSS feeds. Uses Groq for semantic triple extraction.
+
+| Tool | Description |
+|------|-------------|
+| `ingest_url` | Scrape and extract knowledge from any URL |
+| `ingest_arxiv` | Batch search and ingest arXiv papers |
+| `ingest_wikipedia` | Extract knowledge from Wikipedia articles |
+| `ingest_rss` | Monitor RSS feeds for new knowledge |
+| `ingest_text` | Extract triples from raw text |
+| `ingest_file` | Process local files |
+
+### Epistemic Monitoring (14 tools)
+Confidence calibration, claim tracking, confabulation analysis, and verification.
+
+| Tool | Description |
+|------|-------------|
+| `auto_init_session` | **Persistent identity loader** — loads personality, goals, calibration at conversation start |
+| `end_session` | **Personality snapshot** — captures who Claude is for evolution tracking |
+| `check_before_claiming` | Pre-response confidence check with historical calibration |
+| `calibrate_confidence_live` | Real-time calibration with suggested phrasing |
+| `log_claim` / `resolve_claim` | Prediction book for tracking claim accuracy |
+| `get_calibration` | Calibration dashboard by domain |
+| `extract_and_log_claims` | Auto-detect factual claims in responses |
+| `suggest_verification_method` | Recommend how to verify a claim |
+| `generate_metacognitive_prompt` | Internal self-questioning before risky claims |
+| `analyze_confabulation` | Post-mortem on why a confabulation happened |
+| `get_session_bridge` | Cross-conversation continuity context |
+| `get_longitudinal_stats` | **Personality evolution** — tracks changes over time |
+
+### Self-Modeling (7 tools)
+Track Claude's communication style, curiosity, values, reasoning patterns, and self-awareness.
+
+| Tool | Description |
+|------|-------------|
+| `learn_communication_style` | Track verbosity, hedging, jargon, tone |
+| `track_curiosity_spike` | Detect genuine vs performative engagement |
+| `detect_value_violation` | Record value boundary encounters |
+| `evolve_self_model` | Track self-predictions vs actual behavior |
+| `track_reasoning_event` | Log confabulations, verifications, error catches |
+| `self_profile` | Query accumulated self-data |
+| `bootstrap_self_model` | Seed personality from conversation transcripts |
+
+### Fact-Checking (3 tools)
+Verify claims against arXiv papers and track verification history.
+
+| Tool | Description |
+|------|-------------|
+| `verify_claim` | Check a claim against source material |
+| `fetch_arxiv_context` | Get relevant arXiv context for verification |
+| `verification_history` | Review past verifications |
+
+### Grounded Reasoning (4 tools)
+Evidence-based synthesis that prevents confabulation.
+
+| Tool | Description |
+|------|-------------|
+| `synthesize_grounded` | Cross-domain synthesis requiring evidence |
+| `evidence_chain` | Build evidence chains for claims |
+| `calibrate_confidence` | Grade confidence based on evidence strength |
+| `audit_synthesis` | Audit a synthesis for unsupported claims |
+
+### Goal Management (3 tools)
+Persistent goals with plans and progress tracking.
+
+| Tool | Description |
+|------|-------------|
+| `create_goal` | Create a goal with success criteria |
+| `update_goal` | Update progress on a goal |
+| `get_goals` | List active goals |
+
+### Infrastructure (80+ tools)
+System context, LLM routing, encryption, task scheduling, state persistence, structured data queries, cascade simulation, Φ integration measurement, and more.
+
+---
 
 ## Project Structure
 
 ```
-src/
-├── core/          # Data models, config, ontology
-├── storage/       # SQLite graph store
-├── extraction/    # Hybrid extraction pipeline
-├── jury/          # Grammar-constrained judges
-├── reconciliation/# Conflict detection & resolution
-├── pipeline/      # Stage orchestration
-└── api/           # FastAPI endpoints
-
-tests/
-├── unit/          # Component tests
-├── integration/   # End-to-end tests
-└── benchmarks/    # MemoryAgentBench comparison
+PLTM/
+├── mcp_server/
+│   └── pltm_server.py          # MCP server — 148 tools, all dispatch + handlers
+├── src/
+│   ├── analysis/
+│   │   ├── epistemic_monitor.py # Core epistemic tools (V1)
+│   │   ├── epistemic_v2.py      # Advanced epistemic + persistent identity (V2)
+│   │   ├── pltm_self.py         # Self-modeling system
+│   │   ├── data_ingestion.py    # Knowledge ingestion (URL, arXiv, Wikipedia, RSS)
+│   │   ├── fact_checker.py      # Claim verification against sources
+│   │   ├── grounded_reasoning.py# Evidence-based synthesis
+│   │   ├── model_router.py      # Multi-LLM routing (Groq, DeepSeek, Ollama, etc.)
+│   │   ├── goal_manager.py      # Persistent goal tracking
+│   │   ├── task_scheduler.py    # Cron-like task scheduling
+│   │   ├── state_persistence.py # Cross-conversation state
+│   │   └── ...                  # 18 modules total
+│   ├── storage/
+│   │   └── sqlite_store.py      # SQLite graph store with FTS
+│   ├── core/                    # Data models, config
+│   └── ...
+├── data/
+│   └── pltm_mcp.db             # Knowledge base (1,600+ atoms, 30 tables)
+├── requirements.txt
+└── README.md
 ```
 
-## Development
+## Database
 
-### Running Benchmarks
+The knowledge base (`data/pltm_mcp.db`) is included in the repo. It contains:
 
+- **1,600+ semantic atoms** across multiple domains
+- **30 tables** including personality snapshots, prediction book, calibration cache, confabulation log, session history, goals, and more
+- **Personality data** — communication style, curiosity patterns, value boundaries, reasoning events
+
+The DB is portable — clone the repo on another machine and Claude picks up the same identity.
+
+---
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GROQ_API_KEY` | Yes (for LLM tools) | Free at [console.groq.com](https://console.groq.com) |
+| `DEEPSEEK_API_KEY` | No | For DeepSeek model routing |
+| `PYTHONPATH` | Yes (in Claude config) | Must point to the PLTM repo root |
+
+---
+
+## Troubleshooting
+
+**"MCP server not connecting"**
+1. Check the path in `claude_desktop_config.json` is absolute and correct
+2. Verify Python: `.venv/bin/python3.11 -c "import mcp; print('ok')"`
+3. Test server directly: `PYTHONPATH=. .venv/bin/python3.11 -m mcp_server.pltm_server`
+4. Check Claude Desktop logs for errors
+
+**"Import errors"**
 ```bash
-# Run full benchmark suite
-python benchmarks/run_comparison.py
-
-# Generate report
-python benchmarks/generate_report.py
+source .venv/bin/activate
+pip install mcp aiosqlite loguru groq httpx feedparser arxiv
 ```
 
-### Code Quality
+**"Tools not showing up"**
+- Restart Claude Desktop after config changes
+- Verify 148 tools: `python3.11 -c "import ast,re; names=re.findall(r'name=\"([^\"]+)\"', open('mcp_server/pltm_server.py').read()); print(len(names))"`
 
-```bash
-# Format code
-black src/ tests/
+**"Database empty on new machine"**
+- Make sure you pulled `data/pltm_mcp.db` from git
+- If missing: `git lfs pull` or re-clone
 
-# Lint
-ruff check src/ tests/
-
-# Type check
-mypy src/
-```
-
-## Success Metrics
-
-**Achieved Results:**
-- ✅ **Conflict resolution accuracy: 99%** (198/200 comprehensive tests)
-- ✅ **Latency p95: <200ms** at 1000 concurrent users
-- ✅ **Zero hallucinated facts** in test set
-- ✅ **Dual-graph separation** maintained
-- ✅ **Reproducible results** across all runs
-- ✅ **92% code coverage** with comprehensive test suite
-- ✅ **200 comprehensive validation tests** (largest in field)
-
-**Benchmark Comparison:**
-- Our System: **99%** (198/200 tests)
-- Mem0 Baseline: 66.9%
-- **Improvement: +32.1 percentage points**
-
-**Production Metrics:**
-- Scales to 10M+ memories (Neo4j + pgvector)
-- Handles 1000+ concurrent users
-- Auto-scaling Kubernetes deployment
-- Full CI/CD pipeline with automated testing
-- Comprehensive monitoring (Prometheus + Grafana)
+---
 
 ## License
 
@@ -391,4 +299,4 @@ MIT
 
 ## Author
 
-Alby (@Alby2007) - January 2026
+Alby ([@Alby2007](https://github.com/Alby2007)) — 2026

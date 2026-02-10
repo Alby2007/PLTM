@@ -36,9 +36,15 @@ ENV/
 .env
 
 # Database
-data/
-*.db
 *.db-journal
+*.db-wal
+*.db-shm
+
+# Allow the PLTM knowledge base DB to be tracked (in data/ only)
+!data/
+!data/pltm_mcp.db
+data/*.bak.*
+pltm_mcp.db
 
 # Models Cache
 .cache/
