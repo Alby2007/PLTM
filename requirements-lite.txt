@@ -1,0 +1,20 @@
+# Minimal deps for PLTM MCP server (analysis tools only)
+# Use this if you don't need legacy personality/pipeline tools
+# Full install: pip install -r requirements.txt
+
+# MCP protocol
+mcp
+
+# Logging
+loguru
+
+# LLM providers (for ingestion, fact-checking, model routing)
+groq
+httpx
+
+# Data ingestion
+feedparser
+arxiv
+
+# Database (async, used by legacy store)
+aiosqlite

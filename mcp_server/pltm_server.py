@@ -22,28 +22,45 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from mcp.server import Server
 from mcp.types import Tool, TextContent
-
-from src.storage.sqlite_store import SQLiteGraphStore
-from src.pipeline.memory_pipeline import MemoryPipeline
-from src.personality.personality_mood_agent import PersonalityMoodAgent
-from src.personality.personality_synthesizer import PersonalitySynthesizer
-from src.personality.mood_tracker import MoodTracker
-from src.personality.mood_patterns import MoodPatterns
-from src.personality.enhanced_conflict_resolver import EnhancedConflictResolver
-from src.personality.contextual_personality import ContextualPersonality
-from src.core.models import MemoryAtom, AtomType, Provenance, GraphType
 from loguru import logger
+
+# --- Heavy legacy imports (require pydantic, torch, outlines, etc.) ---
+# These are optional — if missing, legacy personality/pipeline tools won't work
+# but all 148 analysis tools (epistemic, self-model, ingestion, etc.) still function.
+_LEGACY_AVAILABLE = False
+try:
+    from src.storage.sqlite_store import SQLiteGraphStore
+    from src.pipeline.memory_pipeline import MemoryPipeline
+    from src.personality.personality_mood_agent import PersonalityMoodAgent
+    from src.personality.personality_synthesizer import PersonalitySynthesizer
+    from src.personality.mood_tracker import MoodTracker
+    from src.personality.mood_patterns import MoodPatterns
+    from src.personality.enhanced_conflict_resolver import EnhancedConflictResolver
+    from src.personality.contextual_personality import ContextualPersonality
+    from src.core.models import MemoryAtom, AtomType, Provenance, GraphType
+    _LEGACY_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Legacy modules unavailable (missing deps: {e}). "
+                   "Analysis tools still work. Install full deps with: pip install -r requirements.txt")
+    SQLiteGraphStore = None
+    MemoryPipeline = None
+    PersonalityMoodAgent = None
+    PersonalitySynthesizer = None
+    MoodTracker = None
+    MoodPatterns = None
+    EnhancedConflictResolver = None
+    ContextualPersonality = None
 
 
 # Initialize PLTM system
-store: Optional[SQLiteGraphStore] = None
-pipeline: Optional[MemoryPipeline] = None
-personality_agent: Optional[PersonalityMoodAgent] = None
-personality_synth: Optional[PersonalitySynthesizer] = None
-mood_tracker: Optional[MoodTracker] = None
-mood_patterns: Optional[MoodPatterns] = None
-conflict_resolver: Optional[EnhancedConflictResolver] = None
-contextual_personality: Optional[ContextualPersonality] = None
+store: Optional[Any] = None
+pipeline: Optional[Any] = None
+personality_agent: Optional[Any] = None
+personality_synth: Optional[Any] = None
+mood_tracker: Optional[Any] = None
+mood_patterns: Optional[Any] = None
+conflict_resolver: Optional[Any] = None
+contextual_personality: Optional[Any] = None
 
 
 async def initialize_pltm():
@@ -54,21 +71,24 @@ async def initialize_pltm():
     # Initialize storage (absolute path so it works regardless of cwd)
     db_path = Path(__file__).parent.parent / "data" / "pltm_mcp.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    store = SQLiteGraphStore(db_path)
-    await store.connect()
-    
-    # Initialize pipeline
-    pipeline = MemoryPipeline(store)
-    
-    # Initialize personality/mood components
-    personality_agent = PersonalityMoodAgent(pipeline)
-    personality_synth = PersonalitySynthesizer(store)
-    mood_tracker = MoodTracker(store)
-    mood_patterns = MoodPatterns(store)
-    conflict_resolver = EnhancedConflictResolver(store)
-    contextual_personality = ContextualPersonality(store)
-    
-    logger.info("PLTM MCP Server initialized")
+
+    if _LEGACY_AVAILABLE:
+        store = SQLiteGraphStore(db_path)
+        await store.connect()
+        
+        # Initialize pipeline
+        pipeline = MemoryPipeline(store)
+        
+        # Initialize personality/mood components
+        personality_agent = PersonalityMoodAgent(pipeline)
+        personality_synth = PersonalitySynthesizer(store)
+        mood_tracker = MoodTracker(store)
+        mood_patterns = MoodPatterns(store)
+        conflict_resolver = EnhancedConflictResolver(store)
+        contextual_personality = ContextualPersonality(store)
+        logger.info("PLTM MCP Server initialized (full mode — all modules loaded)")
+    else:
+        logger.info("PLTM MCP Server initialized (lite mode — analysis tools only)")
 
 
 # Create MCP server
@@ -2185,11 +2205,39 @@ async def list_tools() -> List[Tool]:
     ]
 
 
+_LEGACY_TOOLS = {
+    "store_memory_atom", "query_personality", "detect_mood", "get_mood_patterns",
+    "resolve_conflict", "extract_personality_traits", "get_adaptive_prompt",
+    "get_personality_summary", "bootstrap_from_sample", "bootstrap_from_messages",
+    "track_trait_evolution", "predict_reaction", "get_meta_patterns",
+    "learn_from_interaction", "predict_session", "get_self_model",
+    "init_claude_session", "update_claude_style", "learn_interaction_dynamic",
+    "record_milestone", "add_shared_vocabulary", "get_claude_personality",
+    "evolve_claude_personality", "deep_personality_analysis",
+    "enrich_claude_personality", "learn_from_url", "learn_from_paper",
+    "learn_from_code", "get_learning_stats", "batch_ingest_wikipedia",
+    "batch_ingest_papers", "batch_ingest_repos", "get_learning_schedule",
+    "run_learning_task", "cross_domain_synthesis", "get_universal_principles",
+    "get_transfer_suggestions", "learn_from_conversation",
+}
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
     """Handle tool calls"""
     
     try:
+        # Guard: legacy tools need heavy deps (pydantic, torch, outlines, etc.)
+        if not _LEGACY_AVAILABLE and name in _LEGACY_TOOLS:
+            return [TextContent(
+                type="text",
+                text=compact_json({
+                    "error": f"Tool '{name}' requires legacy modules (pydantic, torch, outlines). "
+                             "Install with: pip install -r requirements.txt",
+                    "available": "All analysis tools (epistemic, self-model, ingestion, etc.) work without these deps."
+                })
+            )]
+
         if name == "store_memory_atom":
             return await handle_store_atom(arguments)
         

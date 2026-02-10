@@ -23,10 +23,12 @@ python3.11 -m venv .venv
 source .venv/bin/activate        # macOS/Linux
 # .venv\Scripts\activate         # Windows
 
-# Install dependencies
+# Install dependencies (lite — all analysis tools, no torch/outlines)
 pip install --upgrade pip
-pip install mcp aiosqlite loguru groq httpx feedparser arxiv sentence-transformers
-pip install -r requirements.txt
+pip install -r requirements-lite.txt
+
+# OR full install (adds legacy personality/pipeline tools — needs torch, outlines, etc.)
+# pip install -r requirements.txt
 ```
 
 ### 2. Set API keys
@@ -280,7 +282,7 @@ The DB is portable — clone the repo on another machine and Claude picks up the
 **"Import errors"**
 ```bash
 source .venv/bin/activate
-pip install mcp aiosqlite loguru groq httpx feedparser arxiv
+pip install -r requirements-lite.txt
 ```
 
 **"Tools not showing up"**
