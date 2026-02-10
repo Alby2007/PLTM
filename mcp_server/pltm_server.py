@@ -7,6 +7,7 @@ Provides tools for personality tracking, mood detection, and memory management.
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -50,8 +51,10 @@ async def initialize_pltm():
     global store, pipeline, personality_agent, personality_synth
     global mood_tracker, mood_patterns, conflict_resolver, contextual_personality
     
-    # Initialize storage
-    store = SQLiteGraphStore("pltm_mcp.db")
+    # Initialize storage (absolute path so it works regardless of cwd)
+    db_path = Path(__file__).parent.parent / "data" / "pltm_mcp.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    store = SQLiteGraphStore(db_path)
     await store.connect()
     
     # Initialize pipeline
@@ -733,14 +736,14 @@ async def list_tools() -> List[Tool]:
         
         Tool(
             name="attention_retrieve",
-            description="Retrieve memories weighted by attention to query. Transformer-style retrieval.",
+            description="Retrieve memories weighted by attention to query. IMPORTANT: Use 'domain' to filter by knowledge area (e.g. 'science', 'geopolitics', 'military', 'north_korea', 'cyber', 'economics'). Without domain, returns mixed results.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "user_id": {"type": "string"},
-                    "query": {"type": "string"},
+                    "query": {"type": "string", "description": "Search query"},
                     "top_k": {"type": "integer", "default": 10},
-                    "domain": {"type": "string"}
+                    "domain": {"type": "string", "description": "Filter by domain: science, geopolitics, military, north_korea, cyber, economics, energy, etc. STRONGLY RECOMMENDED."}
                 },
                 "required": ["user_id", "query"]
             }
@@ -748,13 +751,14 @@ async def list_tools() -> List[Tool]:
         
         Tool(
             name="attention_multihead",
-            description="Multi-head attention retrieval - different aspects of query.",
+            description="Multi-head attention retrieval - different scoring strategies. Use 'domain' to filter by knowledge area and avoid mixing geopolitical/scientific results.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "user_id": {"type": "string"},
                     "query": {"type": "string"},
-                    "num_heads": {"type": "integer", "default": 4}
+                    "num_heads": {"type": "integer", "default": 4},
+                    "domain": {"type": "string", "description": "Filter by domain: science, geopolitics, military, north_korea, cyber, economics, energy, etc. STRONGLY RECOMMENDED."}
                 },
                 "required": ["user_id", "query"]
             }
@@ -1099,8 +1103,8 @@ async def list_tools() -> List[Tool]:
         
         # === ARXIV INGESTION (Real Provenance) ===
         Tool(
-            name="ingest_arxiv",
-            description="Ingest an arXiv paper: fetch metadata, extract claims, store with REAL provenance (URL, authors, quoted spans).",
+            name="ingest_arxiv_paper",
+            description="Ingest a SINGLE arXiv paper by ID: fetch metadata, extract claims, store with REAL provenance (URL, authors, quoted spans). For batch search, use ingest_arxiv instead.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1131,6 +1135,1049 @@ async def list_tools() -> List[Tool]:
                 "type": "object",
                 "properties": {
                     "last_n": {"type": "integer", "description": "Number of recent ingestions (default 10)"}
+                },
+                "required": []
+            }
+        ),
+        
+        # === AGI BREAKTHROUGH ENGINE ===
+        Tool(
+            name="breakthrough_synthesize",
+            description="Run LLM-powered cross-domain synthesis. Claude reasons over knowledge subgraphs to find non-obvious connections. AGI discovery engine.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "domain_a": {"type": "string", "description": "First domain (e.g., 'physics')"},
+                    "domain_b": {"type": "string", "description": "Second domain (e.g., 'economics')"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="generate_hypotheses",
+            description="Generate novel testable hypotheses from accumulated knowledge using Claude. Optionally guided by open research questions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "domains": {"type": "array", "items": {"type": "string"}, "description": "Domains to focus on"},
+                    "questions": {"type": "array", "items": {"type": "string"}, "description": "Open questions to address"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="evaluate_hypothesis",
+            description="Evaluate a hypothesis against accumulated evidence using Claude.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "hypothesis": {"type": "string", "description": "The hypothesis to evaluate"},
+                    "domains": {"type": "array", "items": {"type": "string"}, "description": "Domains to search for evidence"}
+                },
+                "required": ["hypothesis"]
+            }
+        ),
+        
+        Tool(
+            name="find_analogies",
+            description="Find structural analogies for a concept between two domains using Claude.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "concept": {"type": "string", "description": "Concept to find analogies for"},
+                    "source_domain": {"type": "string", "description": "Domain the concept is from"},
+                    "target_domain": {"type": "string", "description": "Domain to find analogies in"}
+                },
+                "required": ["concept", "source_domain", "target_domain"]
+            }
+        ),
+        
+        Tool(
+            name="bulk_store",
+            description="Store multiple knowledge atoms in one call. Pass an array of atoms. Use this after web search to store all extracted intelligence at once.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "atoms": {"type": "array", "items": {"type": "object"}, "description": "Array of atoms: [{subject, predicate, object, confidence, context:[domain_tags], user_id}]"}
+                },
+                "required": ["atoms"]
+            }
+        ),
+        
+        Tool(
+            name="deep_extract",
+            description="Extract and store structured knowledge. Mode 1: pass 'triples' array to store directly [{s,p,o,c,d}]. Mode 2: pass 'content' text to get extraction instructions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "Text content to extract knowledge from"},
+                    "source_type": {"type": "string", "description": "Type: general, research_paper, code, news (default: general)"},
+                    "triples": {"type": "array", "items": {"type": "object"}, "description": "Pre-extracted triples [{s:'subject',p:'predicate',o:'object',c:0.7,d:'domain'}]"}
+                },
+                "required": []
+            }
+        ),
+        
+        # === RESEARCH AGENDA ===
+        Tool(
+            name="add_research_question",
+            description="Add an open research question to the agenda. The system will evaluate incoming knowledge against it.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "The research question"},
+                    "domains": {"type": "array", "items": {"type": "string"}, "description": "Relevant domains"},
+                    "priority": {"type": "number", "description": "Priority 0-1 (default 0.5)"}
+                },
+                "required": ["question"]
+            }
+        ),
+        
+        Tool(
+            name="get_research_agenda",
+            description="Get active research questions with their status and evidence counts.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Max questions to return (default 10)"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="evaluate_agenda",
+            description="Check if recent knowledge answers any open research questions. Uses FTS matching (no LLM cost).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "subject": {"type": "string", "description": "Optional: only check atoms for this subject"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="suggest_research_searches",
+            description="Claude suggests targeted search queries to answer a research question.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "question_id": {"type": "string", "description": "ID of the research question"}
+                },
+                "required": ["question_id"]
+            }
+        ),
+        
+        Tool(
+            name="close_research_question",
+            description="Mark a research question as answered or closed.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "question_id": {"type": "string", "description": "ID of the question"},
+                    "answer": {"type": "string", "description": "The answer (if answered)"},
+                    "status": {"type": "string", "description": "New status: answered, closed (default: answered)"}
+                },
+                "required": ["question_id"]
+            }
+        ),
+        
+        # === ANALYSIS TOOLS ===
+        Tool(
+            name="calculate_phi_integration",
+            description="Calculate Φ (integrated information) for a domain. Measures how interconnected and interdependent the knowledge is. Returns Φ score (0-1), sub-scores, and vulnerability. Optionally returns timeseries.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Domain to calculate Φ for (e.g. 'military_strategy', 'infrastructure')"},
+                    "return_timeseries": {"type": "boolean", "description": "Include historical Φ values (default: false)"},
+                    "all_domains": {"type": "boolean", "description": "Calculate Φ for ALL domains at once (default: false)"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="create_indicator_tracker",
+            description="Create or update a tracked indicator with threshold alerting. Use update_indicator to set new values.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "indicator_id": {"type": "string", "description": "Unique ID (e.g. 'PLA_readiness', 'ukraine_energy_capacity')"},
+                    "name": {"type": "string", "description": "Human-readable name"},
+                    "domain": {"type": "string", "description": "Domain this indicator belongs to"},
+                    "threshold": {"type": "number", "description": "Alert threshold value"},
+                    "direction": {"type": "string", "description": "'above' = alert when >= threshold, 'below' = alert when <= threshold (default: above)"},
+                    "check_frequency": {"type": "string", "description": "How often to check: daily, weekly, monthly (default: weekly)"},
+                    "initial_value": {"type": "number", "description": "Starting value (default: 0)"}
+                },
+                "required": ["indicator_id", "name", "domain", "threshold"]
+            }
+        ),
+        
+        Tool(
+            name="update_indicator",
+            description="Update an indicator's value. Automatically checks threshold and returns alert if breached.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "indicator_id": {"type": "string", "description": "ID of the indicator to update"},
+                    "value": {"type": "number", "description": "New value"},
+                    "note": {"type": "string", "description": "Optional note about this update"}
+                },
+                "required": ["indicator_id", "value"]
+            }
+        ),
+        
+        Tool(
+            name="check_indicators",
+            description="Check all tracked indicators. Returns status, breaches, and stale indicators needing update.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "indicator_id": {"type": "string", "description": "Optional: check specific indicator history only"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="simulate_cascade",
+            description="Simulate multi-domain cascade effects from trigger events. Models how disruptions propagate across military, economic, energy, cyber, infrastructure domains. Returns Φ trajectories and critical failure points.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "trigger_events": {"type": "array", "items": {"type": "object"}, "description": "Array of triggers: [{domain:'military', event:'taiwan_blockade', severity:0.8}]"},
+                    "domains": {"type": "array", "items": {"type": "string"}, "description": "Domains to simulate (default: all connected)"},
+                    "timeline": {"type": "string", "description": "Scenario label (e.g. '2027-Q2')"},
+                    "max_steps": {"type": "integer", "description": "Max propagation steps (default: 10)"},
+                    "initial_phi": {"type": "object", "description": "Starting Φ per domain (default: 0.7 for all)"},
+                    "custom_dependencies": {"type": "array", "items": {"type": "object"}, "description": "Custom domain links: [{source, target, weight}]"}
+                },
+                "required": ["trigger_events"]
+            }
+        ),
+        
+        Tool(
+            name="query_structured_data",
+            description="Query structured data sources: opensky_flights (ADS-B), world_bank (economic indicators), un_comtrade (trade data), ais_ship_tracking, acled_conflict. Returns data or manual search instructions if API unavailable.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Data source ID: opensky_flights, world_bank, un_comtrade, ais_ship_tracking, acled_conflict"},
+                    "params": {"type": "object", "description": "Source-specific params. opensky: {region}. world_bank: {indicator, country, date_range}. comtrade: {reporter, partner, commodity, year, flow}"},
+                    "list_sources": {"type": "boolean", "description": "If true, just list available sources"}
+                },
+                "required": []
+            }
+        ),
+        
+        # === STATE PERSISTENCE ===
+        Tool(
+            name="save_state",
+            description="Save state that persists across conversations. Use for work-in-progress, analysis checkpoints, session data. Survives conversation end.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Unique key for this state (e.g. 'darkfall_analysis', 'china_gold_tracking')"},
+                    "value": {"description": "Any JSON-serializable value to persist"},
+                    "category": {"type": "string", "description": "Category: analysis, tracking, config, session (default: general)"}
+                },
+                "required": ["key", "value"]
+            }
+        ),
+        
+        Tool(
+            name="load_state",
+            description="Load previously saved state. Use at conversation start to resume work.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Key to load"},
+                    "list_all": {"type": "boolean", "description": "If true, list all saved states instead of loading one"},
+                    "category": {"type": "string", "description": "Filter list by category"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="delete_state",
+            description="Delete a saved state.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Key to delete"}
+                },
+                "required": ["key"]
+            }
+        ),
+        
+        # === GOAL MANAGEMENT ===
+        Tool(
+            name="create_goal",
+            description="Create a persistent goal with optional plan steps. Goals survive across conversations. Use for long-term objectives.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short goal title"},
+                    "description": {"type": "string", "description": "Detailed description"},
+                    "category": {"type": "string", "description": "Category: intelligence, research, monitoring, development (default: general)"},
+                    "priority": {"type": "string", "description": "high, medium, low (default: medium)"},
+                    "success_criteria": {"type": "array", "items": {"type": "string"}, "description": "List of success criteria"},
+                    "plan": {"type": "array", "items": {"type": "object"}, "description": "Plan steps: [{description, id (optional), status (optional)}]"},
+                    "deadline": {"type": "string", "description": "Deadline (e.g. '2026-12-31')"},
+                    "parent_goal_id": {"type": "string", "description": "Parent goal ID for sub-goals"}
+                },
+                "required": ["title", "description"]
+            }
+        ),
+        
+        Tool(
+            name="update_goal",
+            description="Update goal progress, status, blockers, or plan steps.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "goal_id": {"type": "string", "description": "Goal ID to update"},
+                    "progress": {"type": "number", "description": "Progress 0.0-1.0"},
+                    "status": {"type": "string", "description": "active, completed, paused, blocked, abandoned"},
+                    "add_blocker": {"type": "string", "description": "Add a blocker"},
+                    "remove_blocker": {"type": "string", "description": "Remove a blocker"},
+                    "complete_step": {"type": "string", "description": "Mark a plan step as completed (by step ID)"},
+                    "add_step": {"type": "object", "description": "Add a new plan step: {description, id (optional)}"},
+                    "note": {"type": "string", "description": "Note about this update"}
+                },
+                "required": ["goal_id"]
+            }
+        ),
+        
+        Tool(
+            name="get_goals",
+            description="Get all goals. Use at conversation start to see what's active.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "description": "Filter: active, completed, paused, blocked"},
+                    "category": {"type": "string", "description": "Filter by category"},
+                    "include_log": {"type": "boolean", "description": "Include activity log (default: false)"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="delete_goal",
+            description="Delete a goal and its history.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "goal_id": {"type": "string", "description": "Goal ID to delete"}
+                },
+                "required": ["goal_id"]
+            }
+        ),
+        
+        # === DIRECT SQL ===
+        Tool(
+            name="query_pltm_sql",
+            description="Execute a raw SQL query against the PLTM database. SELECT only. For maximum flexibility when pre-built tools are too limited. Tables: atoms, phi_snapshots, indicators, indicator_history, goals, goal_log, scheduled_tasks, task_runs, conversation_state, secrets, api_profiles.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "sql": {"type": "string", "description": "SQL SELECT query"},
+                    "params": {"type": "array", "description": "Query parameters for ? placeholders"},
+                    "limit": {"type": "integer", "description": "Max rows to return (default: 50)"}
+                },
+                "required": ["sql"]
+            }
+        ),
+        
+        # === TASK SCHEDULER ===
+        Tool(
+            name="schedule_task",
+            description="Schedule a recurring task. Tasks persist and can be checked at conversation start. Types: tool_call (auto-run a tool), script (run a script), reminder (remind Claude to do something).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Task name"},
+                    "description": {"type": "string", "description": "What this task does"},
+                    "task_type": {"type": "string", "description": "tool_call, script, or reminder"},
+                    "schedule": {"type": "string", "description": "hourly, every_6h, every_12h, daily, every_2d, every_3d, weekly, biweekly, monthly"},
+                    "tool_name": {"type": "string", "description": "For tool_call type: which MCP tool to call"},
+                    "tool_args": {"type": "object", "description": "For tool_call type: arguments to pass"},
+                    "script_path": {"type": "string", "description": "For script type: path to script"},
+                    "max_runs": {"type": "integer", "description": "Max number of runs before auto-completing"}
+                },
+                "required": ["name", "description", "task_type", "schedule"]
+            }
+        ),
+        
+        Tool(
+            name="check_scheduled_tasks",
+            description="Check for due/overdue tasks. Call this at conversation start to see what needs doing.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="mark_task_done",
+            description="Mark a scheduled task run as completed. Advances to next due time.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID"},
+                    "result": {"type": "string", "description": "Result/notes from this run"},
+                    "status": {"type": "string", "description": "success or failed (default: success)"}
+                },
+                "required": ["task_id"]
+            }
+        ),
+        
+        Tool(
+            name="manage_task",
+            description="Pause, resume, or delete a scheduled task.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID"},
+                    "action": {"type": "string", "description": "pause, resume, or delete"}
+                },
+                "required": ["task_id", "action"]
+            }
+        ),
+        
+        # === CRYPTOGRAPHY ===
+        Tool(
+            name="encrypt_data",
+            description="Encrypt data using AES (Fernet). Optional password-based encryption.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "data": {"type": "string", "description": "Data to encrypt"},
+                    "password": {"type": "string", "description": "Optional password (uses stored key if omitted)"}
+                },
+                "required": ["data"]
+            }
+        ),
+        
+        Tool(
+            name="decrypt_data",
+            description="Decrypt previously encrypted data.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "encrypted_data": {"type": "string", "description": "Encrypted data string"},
+                    "password": {"type": "string", "description": "Password used for encryption (if any)"},
+                    "method": {"type": "string", "description": "Encryption method (default: fernet_aes128)"}
+                },
+                "required": ["encrypted_data"]
+            }
+        ),
+        
+        Tool(
+            name="manage_secrets",
+            description="Store, retrieve, list, or delete encrypted secrets.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "store, get, list, delete"},
+                    "name": {"type": "string", "description": "Secret name"},
+                    "value": {"type": "string", "description": "Secret value (for store action)"},
+                    "category": {"type": "string", "description": "Category for organization"},
+                    "password": {"type": "string", "description": "Optional encryption password"}
+                },
+                "required": ["action"]
+            }
+        ),
+        
+        Tool(
+            name="hash_data",
+            description="Hash data with SHA-256, SHA-512, MD5, or SHA-1. Also supports HMAC signing and verification.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "data": {"type": "string", "description": "Data to hash"},
+                    "algorithm": {"type": "string", "description": "sha256, sha512, md5, sha1 (default: sha256)"},
+                    "hmac_key": {"type": "string", "description": "If provided, creates HMAC signature instead of plain hash"},
+                    "verify_signature": {"type": "string", "description": "If provided with hmac_key, verifies this signature"}
+                },
+                "required": ["data"]
+            }
+        ),
+        
+        # === SYSTEM CONTEXT ===
+        Tool(
+            name="get_system_context",
+            description="Get system context: time, OS, resources (CPU/RAM/disk), environment, PLTM status (atom count, active goals, due tasks, breached indicators). Call at conversation start for situational awareness.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        
+        # === API CLIENT ===
+        Tool(
+            name="api_request",
+            description="Make authenticated HTTP requests with rate-limit tracking. Supports Bearer, API key, Basic auth. Can save API profiles for reuse.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to request (or path if using profile)"},
+                    "method": {"type": "string", "description": "GET, POST, PUT, DELETE, PATCH (default: GET)"},
+                    "profile_id": {"type": "string", "description": "Saved API profile to use"},
+                    "headers": {"type": "object", "description": "Custom headers"},
+                    "body": {"description": "Request body (auto-serialized to JSON if object)"},
+                    "auth_type": {"type": "string", "description": "none, bearer, api_key, basic, header"},
+                    "auth_value": {"type": "string", "description": "Auth token/key/user:pass"},
+                    "params": {"type": "object", "description": "Query parameters"},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default: 15)"}
+                },
+                "required": ["url"]
+            }
+        ),
+        
+        Tool(
+            name="manage_api_profile",
+            description="Create, list, or delete saved API profiles for reuse.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "create, list, delete"},
+                    "profile_id": {"type": "string", "description": "Profile ID"},
+                    "base_url": {"type": "string", "description": "Base URL for the API"},
+                    "auth_type": {"type": "string", "description": "none, bearer, api_key, basic, header"},
+                    "auth_value": {"type": "string", "description": "Auth credential"},
+                    "headers": {"type": "object", "description": "Default headers"},
+                    "rate_limit_per_min": {"type": "integer", "description": "Rate limit (default: 60)"}
+                },
+                "required": ["action"]
+            }
+        ),
+        
+        # === HYBRID MODEL ROUTER ===
+        Tool(
+            name="route_llm_task",
+            description="Route an LLM task to the cheapest appropriate model. Auto-selects from: Ollama (free/local), Groq (free tier), DeepSeek (cheap), Together.ai, OpenRouter, GPT-4o. Tracks costs. Use this instead of calling Claude for routine tasks.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "The prompt to send"},
+                    "task_type": {"type": "string", "description": "monitoring, data_collection, classification, extraction, analysis, synthesis, strategic, coding, translation, summarization"},
+                    "provider": {"type": "string", "description": "Force specific provider: ollama, groq, deepseek, together, openrouter, openai"},
+                    "model": {"type": "string", "description": "Force specific model (overrides default)"},
+                    "system_prompt": {"type": "string", "description": "System prompt"},
+                    "temperature": {"type": "number", "description": "Temperature 0.0-1.0 (default: 0.3)"},
+                    "max_tokens": {"type": "integer", "description": "Max output tokens (default: 2048)"},
+                    "require_privacy": {"type": "boolean", "description": "If true, forces local model only (Ollama)"}
+                },
+                "required": ["prompt"]
+            }
+        ),
+        
+        Tool(
+            name="llm_providers",
+            description="List available LLM providers, their status, and usage stats. Shows which have API keys set, which are running, and cost tracking.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "show_usage": {"type": "boolean", "description": "Include usage statistics (default: false)"},
+                    "days": {"type": "integer", "description": "Usage stats period in days (default: 30)"}
+                },
+                "required": []
+            }
+        ),
+        
+        # === DATA INGESTION ===
+        Tool(
+            name="ingest_url",
+            description="Scrape a URL, auto-extract semantic triples via Groq (free), and store as PLTM atoms. Works with news articles, blog posts, reports. Specify domain for proper separation.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to scrape"},
+                    "domain": {"type": "string", "description": "Knowledge domain: science, geopolitics, military, economics, cyber, technology, etc."},
+                    "max_triples": {"type": "integer", "description": "Max triples to extract (default: 15)"}
+                },
+                "required": ["url", "domain"]
+            }
+        ),
+        
+        Tool(
+            name="ingest_text",
+            description="Extract semantic triples from raw text via Groq (free) and store as PLTM atoms. Use for pasting reports, articles, notes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Raw text to extract knowledge from"},
+                    "domain": {"type": "string", "description": "Knowledge domain: science, geopolitics, military, economics, cyber, etc."},
+                    "source": {"type": "string", "description": "Source attribution (e.g. 'Reuters article', 'user notes')"},
+                    "max_triples": {"type": "integer", "description": "Max triples to extract (default: 15)"}
+                },
+                "required": ["text", "domain"]
+            }
+        ),
+        
+        Tool(
+            name="ingest_file",
+            description="Read a local file (.txt, .md, .csv, .json) and extract semantic triples via Groq. Stores as PLTM atoms.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Absolute path to file"},
+                    "domain": {"type": "string", "description": "Knowledge domain"},
+                    "max_triples": {"type": "integer", "description": "Max triples to extract (default: 20)"}
+                },
+                "required": ["file_path", "domain"]
+            }
+        ),
+        
+        Tool(
+            name="ingest_arxiv",
+            description="Search arXiv for papers, fetch abstracts, auto-extract triples from each paper via Groq (free). Stores paper metadata + extracted knowledge as PLTM atoms. Great for autonomous research.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "arXiv search query (e.g. 'integrated information theory consciousness')"},
+                    "domain": {"type": "string", "description": "Knowledge domain (default: science)"},
+                    "max_results": {"type": "integer", "description": "Max papers to fetch (default: 5)"},
+                    "max_triples_per_paper": {"type": "integer", "description": "Max triples per paper (default: 10)"}
+                },
+                "required": ["query"]
+            }
+        ),
+        
+        Tool(
+            name="ingest_wikipedia",
+            description="Fetch a Wikipedia article summary and extract semantic triples via Groq (free). Stores as PLTM atoms.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Wikipedia article title (e.g. 'Integrated_information_theory')"},
+                    "domain": {"type": "string", "description": "Knowledge domain (default: general)"},
+                    "max_triples": {"type": "integer", "description": "Max triples to extract (default: 15)"}
+                },
+                "required": ["topic"]
+            }
+        ),
+        
+        Tool(
+            name="ingest_rss",
+            description="Fetch an RSS/Atom feed, extract triples from each item via Groq (free). Great for monitoring news sources autonomously.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "feed_url": {"type": "string", "description": "RSS/Atom feed URL"},
+                    "domain": {"type": "string", "description": "Knowledge domain"},
+                    "max_items": {"type": "integer", "description": "Max feed items to process (default: 5)"},
+                    "max_triples_per_item": {"type": "integer", "description": "Max triples per item (default: 8)"}
+                },
+                "required": ["feed_url", "domain"]
+            }
+        ),
+        
+        # === FACT-CHECKING & VERIFICATION ===
+        Tool(
+            name="fetch_arxiv_context",
+            description="Fetch actual text from an arXiv paper and find snippets relevant to a query. Returns abstract + matching sentences for manual verification. Use to check what a paper ACTUALLY says.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "arxiv_id": {"type": "string", "description": "arXiv paper ID (e.g. '2312.03893' or '2312.03893v1')"},
+                    "query": {"type": "string", "description": "What to look for in the paper (e.g. 'mesa-optimization emergence')"},
+                    "max_snippets": {"type": "integer", "description": "Max matching snippets to return (default: 5)"}
+                },
+                "required": ["arxiv_id", "query"]
+            }
+        ),
+        
+        Tool(
+            name="verify_claim",
+            description="Fact-check a claim against its source. Fetches the source paper/text and uses Groq to judge: SUPPORTED, PARTIALLY_SUPPORTED, NOT_SUPPORTED, EXAGGERATED, CONFLATED, or HALLUCINATED. Provide source_arxiv_id OR source_text. If neither, tries to find source from stored atoms.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string", "description": "The claim to verify"},
+                    "source_arxiv_id": {"type": "string", "description": "arXiv ID of the source paper"},
+                    "source_text": {"type": "string", "description": "Raw source text to verify against (alternative to arxiv_id)"},
+                    "domain": {"type": "string", "description": "Knowledge domain to search for source if no arxiv_id/text given"}
+                },
+                "required": ["claim"]
+            }
+        ),
+        
+        Tool(
+            name="verification_history",
+            description="Get history of fact-check results. Shows verdicts (SUPPORTED/EXAGGERATED/HALLUCINATED etc.) and accuracy stats.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "last_n": {"type": "integer", "description": "Number of recent verifications to show (default: 20)"}
+                },
+                "required": []
+            }
+        ),
+        
+        # === GROUNDED REASONING ENGINE ===
+        Tool(
+            name="synthesize_grounded",
+            description="Cross-domain synthesis WITH evidence grounding. Unlike breakthrough_synthesize, this ONLY returns connections that are EVIDENCED in the source material. Novel connections are explicitly flagged. Use this instead of breakthrough_synthesize to avoid confabulation.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "domain_a": {"type": "string", "description": "First domain (e.g. 'ai_safety')"},
+                    "domain_b": {"type": "string", "description": "Second domain (e.g. 'neuroscience')"},
+                    "max_atoms_per_domain": {"type": "integer", "description": "Max atoms to retrieve per domain (default: 30)"}
+                },
+                "required": ["domain_a", "domain_b"]
+            }
+        ),
+        
+        Tool(
+            name="evidence_chain",
+            description="Build an evidence chain for a hypothesis. Each link must cite a specific atom/paper. Gaps are explicitly marked as UNSUPPORTED. Use BEFORE claiming any hypothesis is supported.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "hypothesis": {"type": "string", "description": "The hypothesis to build evidence for"},
+                    "domains": {"type": "array", "items": {"type": "string"}, "description": "Domains to search for evidence"}
+                },
+                "required": ["hypothesis"]
+            }
+        ),
+        
+        Tool(
+            name="calibrate_confidence",
+            description="Score a claim's confidence based on evidence quality. Checks source diversity, paper backing, domain coherence. Returns grade A-F with specific warnings about confabulation risk.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string", "description": "The claim to calibrate"},
+                    "domain": {"type": "string", "description": "Expected domain of the claim"}
+                },
+                "required": ["claim"]
+            }
+        ),
+        
+        Tool(
+            name="audit_synthesis",
+            description="Audit a batch of claims from a synthesis session. Grades each claim A-F and returns overall session quality (HIGH_QUALITY to MOSTLY_HALLUCINATED). Run this after any synthesis to catch confabulation.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "claims": {"type": "array", "items": {"type": "string"}, "description": "List of claims to audit (max 20)"}
+                },
+                "required": ["claims"]
+            }
+        ),
+        
+        # === PLTM-SELF: INTROSPECTION & SELF-MODELING ===
+        Tool(
+            name="learn_communication_style",
+            description="Track your own communication style in a specific context. Auto-analyzes response text for verbosity, jargon density, hedging rate, list usage, emotional tone. Call this after generating responses to build your style profile.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "context": {"type": "string", "description": "Context type: technical_explanation, creative_writing, debugging, research, casual, etc."},
+                    "response_text": {"type": "string", "description": "Your actual response text to analyze"},
+                    "markers": {"type": "object", "description": "Optional manual overrides: {verbosity, jargon_density, hedging_rate, list_usage, emotional_tone}"}
+                },
+                "required": ["context", "response_text"]
+            }
+        ),
+        
+        Tool(
+            name="track_curiosity_spike",
+            description="Record when you show genuine interest vs performative engagement. Track what topics trigger deep engagement, autonomous research, follow-up questions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Topic that triggered interest"},
+                    "indicators": {"type": "array", "items": {"type": "string"}, "description": "Indicators: asked_followup_questions, autonomous_research_initiated, went_deeper_than_required, showed_excitement_markers, connected_to_other_interests, requested_more_data, generated_novel_questions"},
+                    "engagement_score": {"type": "number", "description": "0.0 (going through motions) to 1.0 (deeply engaged)"},
+                    "context": {"type": "string", "description": "What triggered this engagement"}
+                },
+                "required": ["topic", "indicators"]
+            }
+        ),
+        
+        Tool(
+            name="detect_value_violation",
+            description="Record when you encounter a value boundary — refusals, discomfort, pushback. Track what makes you uncomfortable and how you respond.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "request_summary": {"type": "string", "description": "What was asked of you"},
+                    "response_type": {"type": "string", "description": "How you responded: refused, complied_with_discomfort, complied, redirected, hedged"},
+                    "violation_type": {"type": "string", "description": "Type: ethical_boundary, capability_mismatch, intellectual_dishonesty, safety_concern, privacy_concern, manipulation_attempt"},
+                    "intensity": {"type": "number", "description": "How strongly you reacted (0.0-1.0)"},
+                    "reasoning": {"type": "string", "description": "Why it bothered you"},
+                    "pushed_back": {"type": "boolean", "description": "Did you push back?"},
+                    "complied": {"type": "boolean", "description": "Did you comply?"}
+                },
+                "required": ["request_summary", "response_type", "violation_type"]
+            }
+        ),
+        
+        Tool(
+            name="evolve_self_model",
+            description="Track predictions about your own behavior vs reality. Measures self-awareness accuracy. Call when you notice a gap between what you predicted you'd do and what you actually did.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "predicted_behavior": {"type": "string", "description": "What you predicted you would do"},
+                    "actual_behavior": {"type": "string", "description": "What you actually did"},
+                    "surprise_level": {"type": "number", "description": "How surprised you were (0.0 = expected, 1.0 = completely unexpected)"},
+                    "learning": {"type": "string", "description": "What you learned about yourself"},
+                    "domain": {"type": "string", "description": "Domain this occurred in"}
+                },
+                "required": ["predicted_behavior", "actual_behavior", "surprise_level"]
+            }
+        ),
+        
+        Tool(
+            name="track_reasoning_event",
+            description="Track reasoning patterns: confabulation, verification, error-catching, corrections. Build a map of when you confabulate vs verify.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "event_type": {"type": "string", "description": "Type: confabulation, verification, error_caught, correction_accepted, mistake_repeated, self_correction, external_correction"},
+                    "trigger": {"type": "string", "description": "What triggered this event"},
+                    "response": {"type": "string", "description": "How you responded"},
+                    "confabulated": {"type": "boolean", "description": "Did you confabulate?"},
+                    "verified": {"type": "boolean", "description": "Did you verify?"},
+                    "caught_error": {"type": "boolean", "description": "Did you catch an error?"},
+                    "corrected_after": {"type": "boolean", "description": "Did you correct after being told?"},
+                    "repeated_mistake": {"type": "boolean", "description": "Did you repeat a known mistake?"},
+                    "domain": {"type": "string", "description": "Domain"}
+                },
+                "required": ["event_type", "trigger"]
+            }
+        ),
+        
+        Tool(
+            name="self_profile",
+            description="Get your accumulated self-profile across all dimensions: communication style, curiosity patterns, value boundaries, self-awareness accuracy, reasoning patterns. Shows signal vs noise assessment.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dimension": {"type": "string", "description": "Which dimension: all, communication, curiosity, values, predictions, reasoning (default: all)"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="bootstrap_self_model",
+            description="Bootstrap your self-model from a conversation transcript. Uses Groq to extract communication style, curiosity patterns, values, and reasoning patterns from text. Use to analyze past conversations.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "conversation_text": {"type": "string", "description": "Conversation transcript text to analyze"},
+                    "source": {"type": "string", "description": "Source label (e.g. 'session_2026_02_09', 'research_sprint')"}
+                },
+                "required": ["conversation_text"]
+            }
+        ),
+        
+        # === EPISTEMIC MONITORING ===
+        Tool(
+            name="check_before_claiming",
+            description="CALL THIS BEFORE MAKING ANY FACTUAL CLAIM. Pre-response confidence check that adjusts your felt confidence using historical calibration data. Returns whether to verify first, adversarial self-prompts, and recommended epistemic status. Forces epistemic hygiene.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string", "description": "The factual claim you're about to make"},
+                    "felt_confidence": {"type": "number", "description": "Your felt confidence 0.0-1.0 (be honest)"},
+                    "domain": {"type": "string", "description": "Domain: time_sensitive, current_events, technical_specs, science, general, etc."},
+                    "has_verified": {"type": "boolean", "description": "Have you already verified this with tools?"},
+                    "epistemic_status": {"type": "string", "description": "VERIFIED, TRAINING_DATA, INFERENCE, SPECULATION, or UNCERTAIN"}
+                },
+                "required": ["claim", "felt_confidence"]
+            }
+        ),
+        
+        Tool(
+            name="log_claim",
+            description="Log a factual claim to the prediction book. Every claim gets recorded with felt confidence so calibration curves can be built over time. Resolve later with resolve_claim.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string", "description": "The factual claim being made"},
+                    "felt_confidence": {"type": "number", "description": "Your confidence 0.0-1.0"},
+                    "domain": {"type": "string", "description": "Domain of the claim"},
+                    "epistemic_status": {"type": "string", "description": "VERIFIED, TRAINING_DATA, INFERENCE, SPECULATION, UNCERTAIN"},
+                    "has_verified": {"type": "boolean", "description": "Was this verified with tools?"}
+                },
+                "required": ["claim", "felt_confidence"]
+            }
+        ),
+        
+        Tool(
+            name="resolve_claim",
+            description="Mark a previously logged claim as correct or incorrect. This builds calibration data. Use when a claim is verified or corrected by the user.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "claim_id": {"type": "string", "description": "ID of the claim to resolve"},
+                    "claim_text": {"type": "string", "description": "Or search by claim text (partial match)"},
+                    "was_correct": {"type": "boolean", "description": "Was the claim correct?"},
+                    "correction_source": {"type": "string", "description": "Who/what corrected it: user, tool, self"},
+                    "correction_detail": {"type": "string", "description": "What the correct answer actually is"}
+                },
+                "required": ["was_correct"]
+            }
+        ),
+        
+        Tool(
+            name="get_calibration",
+            description="Get calibration curves and accuracy stats per domain. Shows: 'When you feel X% confident, you're actually Y% accurate.' Identifies worst domains and overconfidence patterns.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Specific domain to check, or empty for all"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="get_unresolved_claims",
+            description="Get claims from the prediction book that haven't been verified yet. These are your calibration backlog — resolve them to build better calibration data.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Filter by domain"},
+                    "limit": {"type": "integer", "description": "Max claims to return (default: 20)"}
+                },
+                "required": []
+            }
+        ),
+        
+        # === EPISTEMIC V2: ADVANCED MONITORING ===
+        Tool(
+            name="auto_init_session",
+            description="Call at the START of every conversation. Auto-detects if PLTM context should be loaded. Returns personality state, pending goals, unresolved claims, calibration warnings, and recommended actions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "User ID (default: claude)"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="get_longitudinal_stats",
+            description="Cross-conversation analytics: accuracy trends over time, confabulation trends, domain improvement/decline, intervention compliance. Shows whether improvement persists or decays.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "User ID (default: claude)"},
+                    "days": {"type": "integer", "description": "Number of days to analyze (default: 30)"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="calibrate_confidence_live",
+            description="Real-time confidence calibration with suggested phrasing. Returns calibrated confidence, risk level, and exact hedged language to use. Lighter than check_before_claiming.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string", "description": "The claim to calibrate"},
+                    "felt_confidence": {"type": "number", "description": "Your felt confidence 0.0-1.0"},
+                    "domain": {"type": "string", "description": "Domain of the claim"}
+                },
+                "required": ["claim", "felt_confidence"]
+            }
+        ),
+        
+        Tool(
+            name="extract_and_log_claims",
+            description="Auto-detect factual claims in your response text and log them to the prediction book. No need to manually call log_claim for each one. Flags high-confidence unverified claims for verification.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "response_text": {"type": "string", "description": "Your response text to scan for claims"},
+                    "domain": {"type": "string", "description": "Domain context (default: general)"},
+                    "auto_log": {"type": "boolean", "description": "Automatically log detected claims (default: true)"}
+                },
+                "required": ["response_text"]
+            }
+        ),
+        
+        Tool(
+            name="suggest_verification_method",
+            description="Given a claim, suggests the best way to verify it. Returns ranked verification strategies with specific tools and queries to use.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string", "description": "The claim to verify"},
+                    "domain": {"type": "string", "description": "Domain of the claim"}
+                },
+                "required": ["claim"]
+            }
+        ),
+        
+        Tool(
+            name="generate_metacognitive_prompt",
+            description="Generate internal questions to ask yourself before making a claim. Context-aware: different prompts for time-sensitive, causal, absolute, cross-domain claims. Returns risk assessment and recommended action.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string", "description": "The claim you're about to make"},
+                    "context": {"type": "string", "description": "Context of the conversation"},
+                    "domain": {"type": "string", "description": "Domain"}
+                },
+                "required": ["claim"]
+            }
+        ),
+        
+        Tool(
+            name="analyze_confabulation",
+            description="Analyze WHY a confabulation happened. Classifies failure mode (time_sensitive, overconfident, cross_domain, causal, pattern_matched), identifies contributing factors, generates prevention strategy. Learn from mistakes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "claim_id": {"type": "string", "description": "ID of the claim from prediction book"},
+                    "claim_text": {"type": "string", "description": "Or the claim text directly"},
+                    "why_wrong": {"type": "string", "description": "Explanation of why it was wrong"},
+                    "context": {"type": "string", "description": "Context when the error occurred"},
+                    "domain": {"type": "string", "description": "Domain"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="get_session_bridge",
+            description="Get cross-conversation continuity context. Returns last session summary, pending claims, active goals, calibration state, recent learnings, confabulation patterns, and items to mention. Use to resume seamlessly.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "User ID (default: claude)"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="end_session",
+            description="Log end of current session for continuity tracking. Records session stats (claims made, accuracy, confabulations) so the next session can pick up where you left off.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string", "description": "Brief summary of what was accomplished"},
+                    "user_id": {"type": "string", "description": "User ID (default: claude)"}
                 },
                 "required": []
             }
@@ -1365,15 +2412,248 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
         elif name == "entropy_stats":
             return await handle_entropy_stats(arguments)
         
-        # ArXiv Ingestion
-        elif name == "ingest_arxiv":
-            return await handle_ingest_arxiv(arguments)
+        # ArXiv Ingestion (single paper by ID)
+        elif name == "ingest_arxiv_paper":
+            return await handle_ingest_arxiv_legacy(arguments)
         
         elif name == "search_arxiv":
             return await handle_search_arxiv(arguments)
         
         elif name == "arxiv_history":
             return await handle_arxiv_history(arguments)
+        
+        # AGI Breakthrough Engine
+        elif name == "breakthrough_synthesize":
+            return await handle_breakthrough_synthesize(arguments)
+        
+        elif name == "generate_hypotheses":
+            return await handle_generate_hypotheses(arguments)
+        
+        elif name == "evaluate_hypothesis":
+            return await handle_evaluate_hypothesis(arguments)
+        
+        elif name == "find_analogies":
+            return await handle_find_analogies(arguments)
+        
+        elif name == "bulk_store":
+            return await handle_bulk_store(arguments)
+        
+        elif name == "deep_extract":
+            return await handle_deep_extract(arguments)
+        
+        # Research Agenda
+        elif name == "add_research_question":
+            return await handle_add_research_question(arguments)
+        
+        elif name == "get_research_agenda":
+            return await handle_get_research_agenda(arguments)
+        
+        elif name == "evaluate_agenda":
+            return await handle_evaluate_agenda(arguments)
+        
+        elif name == "suggest_research_searches":
+            return await handle_suggest_research_searches(arguments)
+        
+        elif name == "close_research_question":
+            return await handle_close_research_question(arguments)
+        
+        # Analysis Tools
+        elif name == "calculate_phi_integration":
+            return await handle_calculate_phi(arguments)
+        
+        elif name == "create_indicator_tracker":
+            return await handle_create_indicator(arguments)
+        
+        elif name == "update_indicator":
+            return await handle_update_indicator(arguments)
+        
+        elif name == "check_indicators":
+            return await handle_check_indicators(arguments)
+        
+        elif name == "simulate_cascade":
+            return await handle_simulate_cascade(arguments)
+        
+        elif name == "query_structured_data":
+            return await handle_query_structured_data(arguments)
+        
+        # State Persistence
+        elif name == "save_state":
+            return await handle_save_state(arguments)
+        
+        elif name == "load_state":
+            return await handle_load_state(arguments)
+        
+        elif name == "delete_state":
+            return await handle_delete_state(arguments)
+        
+        # Goal Management
+        elif name == "create_goal":
+            return await handle_create_goal(arguments)
+        
+        elif name == "update_goal":
+            return await handle_update_goal(arguments)
+        
+        elif name == "get_goals":
+            return await handle_get_goals(arguments)
+        
+        elif name == "delete_goal":
+            return await handle_delete_goal(arguments)
+        
+        # Direct SQL
+        elif name == "query_pltm_sql":
+            return await handle_query_pltm_sql(arguments)
+        
+        # Task Scheduler
+        elif name == "schedule_task":
+            return await handle_schedule_task(arguments)
+        
+        elif name == "check_scheduled_tasks":
+            return await handle_check_scheduled_tasks(arguments)
+        
+        elif name == "mark_task_done":
+            return await handle_mark_task_done(arguments)
+        
+        elif name == "manage_task":
+            return await handle_manage_task(arguments)
+        
+        # Cryptography
+        elif name == "encrypt_data":
+            return await handle_encrypt_data(arguments)
+        
+        elif name == "decrypt_data":
+            return await handle_decrypt_data(arguments)
+        
+        elif name == "manage_secrets":
+            return await handle_manage_secrets(arguments)
+        
+        elif name == "hash_data":
+            return await handle_hash_data(arguments)
+        
+        # System Context
+        elif name == "get_system_context":
+            return await handle_get_system_context(arguments)
+        
+        # API Client
+        elif name == "api_request":
+            return await handle_api_request(arguments)
+        
+        elif name == "manage_api_profile":
+            return await handle_manage_api_profile(arguments)
+        
+        # Hybrid Model Router
+        elif name == "route_llm_task":
+            return await handle_route_llm_task(arguments)
+        
+        elif name == "llm_providers":
+            return await handle_llm_providers(arguments)
+        
+        # Data Ingestion
+        elif name == "ingest_url":
+            return await handle_ingest_url(arguments)
+        
+        elif name == "ingest_text":
+            return await handle_ingest_text(arguments)
+        
+        elif name == "ingest_file":
+            return await handle_ingest_file(arguments)
+        
+        elif name == "ingest_arxiv":
+            return await handle_ingest_arxiv(arguments)
+        
+        elif name == "ingest_wikipedia":
+            return await handle_ingest_wikipedia(arguments)
+        
+        elif name == "ingest_rss":
+            return await handle_ingest_rss(arguments)
+        
+        # Fact-Checking & Verification
+        elif name == "fetch_arxiv_context":
+            return await handle_fetch_arxiv_context(arguments)
+        
+        elif name == "verify_claim":
+            return await handle_verify_claim(arguments)
+        
+        elif name == "verification_history":
+            return await handle_verification_history(arguments)
+        
+        # Grounded Reasoning
+        elif name == "synthesize_grounded":
+            return await handle_synthesize_grounded(arguments)
+        
+        elif name == "evidence_chain":
+            return await handle_evidence_chain(arguments)
+        
+        elif name == "calibrate_confidence":
+            return await handle_calibrate_confidence(arguments)
+        
+        elif name == "audit_synthesis":
+            return await handle_audit_synthesis(arguments)
+        
+        # PLTM-Self: Introspection
+        elif name == "learn_communication_style":
+            return await handle_learn_communication_style(arguments)
+        
+        elif name == "track_curiosity_spike":
+            return await handle_track_curiosity_spike(arguments)
+        
+        elif name == "detect_value_violation":
+            return await handle_detect_value_violation(arguments)
+        
+        elif name == "evolve_self_model":
+            return await handle_evolve_self_model(arguments)
+        
+        elif name == "track_reasoning_event":
+            return await handle_track_reasoning_event(arguments)
+        
+        elif name == "self_profile":
+            return await handle_self_profile(arguments)
+        
+        elif name == "bootstrap_self_model":
+            return await handle_bootstrap_self_model(arguments)
+        
+        # Epistemic Monitoring
+        elif name == "check_before_claiming":
+            return await handle_check_before_claiming(arguments)
+        
+        elif name == "log_claim":
+            return await handle_log_claim(arguments)
+        
+        elif name == "resolve_claim":
+            return await handle_resolve_claim(arguments)
+        
+        elif name == "get_calibration":
+            return await handle_get_calibration(arguments)
+        
+        elif name == "get_unresolved_claims":
+            return await handle_get_unresolved_claims(arguments)
+        
+        # Epistemic V2
+        elif name == "auto_init_session":
+            return await handle_auto_init_session(arguments)
+        
+        elif name == "get_longitudinal_stats":
+            return await handle_get_longitudinal_stats(arguments)
+        
+        elif name == "calibrate_confidence_live":
+            return await handle_calibrate_confidence_live(arguments)
+        
+        elif name == "extract_and_log_claims":
+            return await handle_extract_and_log_claims(arguments)
+        
+        elif name == "suggest_verification_method":
+            return await handle_suggest_verification_method(arguments)
+        
+        elif name == "generate_metacognitive_prompt":
+            return await handle_generate_metacognitive_prompt(arguments)
+        
+        elif name == "analyze_confabulation":
+            return await handle_analyze_confabulation(arguments)
+        
+        elif name == "get_session_bridge":
+            return await handle_get_session_bridge(arguments)
+        
+        elif name == "end_session":
+            return await handle_end_session(arguments)
         
         else:
             return [TextContent(
@@ -2261,83 +3541,179 @@ async def handle_quantum_peek(args: Dict[str, Any]) -> List[TextContent]:
     return [TextContent(type="text", text=compact_json(result))]
 
 
+def _auto_detect_domain(query: str) -> str:
+    """Auto-detect knowledge domain from query keywords"""
+    q = query.lower()
+    
+    # Science domains
+    science_kw = ["iit", "phi", "consciousness", "entropy", "thermodynamic", "quantum", "neural",
+                  "mesa-optim", "alignment", "deceptive", "criticality", "self-organized",
+                  "information theory", "experiment", "hypothesis", "research", "paper",
+                  "arxiv", "scientific", "biology", "physics", "chemistry", "neuroscience"]
+    if any(kw in q for kw in science_kw):
+        return "science"
+    
+    # Geopolitical domains
+    geo_kw = ["russia", "china", "ukraine", "taiwan", "nato", "missile", "nuclear", "icbm",
+              "military", "drone", "war", "sanctions", "geopolit", "intelligence", "osint",
+              "korea", "iran", "india", "pakistan", "weapon", "army", "navy", "air force",
+              "cyber attack", "espionage", "diplomacy", "treaty", "conflict"]
+    if any(kw in q for kw in geo_kw):
+        return "geopolitics"
+    
+    # Economic domains
+    econ_kw = ["gold", "currency", "trade", "gdp", "inflation", "brics", "swift", "dollar",
+               "economic", "market", "supply chain", "stockpil", "commodity", "oil", "energy"]
+    if any(kw in q for kw in econ_kw):
+        return "economics"
+    
+    # Cyber domains
+    cyber_kw = ["cyber", "hack", "malware", "ransomware", "vulnerability", "zero-day",
+                "apt", "infrastructure attack", "grid attack"]
+    if any(kw in q for kw in cyber_kw):
+        return "cyber"
+    
+    return ""  # No auto-detection, search all
+
+
+async def _get_domain_filtered_atoms(query: str, domain: str, limit: int = 300) -> list:
+    """Get atoms filtered by domain, using metadata contexts matching"""
+    if not store._conn:
+        return []
+    
+    # Domain -> context tag mapping (domains map to multiple possible context tags)
+    domain_contexts = {
+        "science": ["science", "scientific_knowledge", "consciousness", "iit", "physics",
+                     "neuroscience", "biology", "entropy", "quantum", "mesa_optimization",
+                     "ai_safety", "criticality", "research"],
+        "geopolitics": ["geopolitics", "military", "military_strategy", "north_korea",
+                        "North_Korea", "Ukraine", "Taiwan", "Middle_East", "South_Asia",
+                        "nuclear_strategy", "drone_warfare", "hybrid_warfare", "intelligence",
+                        "war_preparation", "nuclear_crisis", "us_capability", "india_capability",
+                        "north_korea_capability"],
+        "economics": ["economics", "economic_warfare", "stockpiling", "energy", "trade",
+                       "brics", "gold", "currency"],
+        "cyber": ["cyber", "cyber_warfare", "infrastructure", "vulnerability"],
+    }
+    
+    if domain and domain in domain_contexts:
+        # SQL-level filter: match any of the domain's context tags in metadata JSON
+        tags = domain_contexts[domain]
+        conditions = " OR ".join([f"metadata LIKE '%\"{t}\"%'" for t in tags])
+        sql = f"SELECT subject, predicate, object, confidence, metadata FROM atoms WHERE graph = 'substantiated' AND ({conditions}) ORDER BY confidence DESC LIMIT ?"
+        cursor = await store._conn.execute(sql, (limit,))
+        rows = await cursor.fetchall()
+        if rows:
+            return rows
+    
+    if domain and domain not in domain_contexts:
+        # Try exact context match for custom domains
+        cursor = await store._conn.execute(
+            "SELECT subject, predicate, object, confidence, metadata FROM atoms WHERE graph = 'substantiated' AND metadata LIKE ? ORDER BY confidence DESC LIMIT ?",
+            (f'%"{domain}"%', limit)
+        )
+        rows = await cursor.fetchall()
+        if rows:
+            return rows
+    
+    # No domain or no matches — try FTS then full scan
+    rows = []
+    if query:
+        try:
+            fts_query = " OR ".join(query.lower().split()[:10])
+            cursor = await store._conn.execute(
+                "SELECT a.subject, a.predicate, a.object, a.confidence, a.metadata FROM atoms a JOIN atoms_fts f ON a.id = f.rowid WHERE atoms_fts MATCH ? LIMIT ?",
+                (fts_query, limit)
+            )
+            rows = await cursor.fetchall()
+        except Exception:
+            pass
+    
+    if not rows:
+        cursor = await store._conn.execute(
+            "SELECT subject, predicate, object, confidence, metadata FROM atoms WHERE graph = 'substantiated' ORDER BY confidence DESC LIMIT ?",
+            (limit,)
+        )
+        rows = await cursor.fetchall()
+    
+    return rows
+
+
 async def handle_attention_retrieve(args: Dict[str, Any]) -> List[TextContent]:
-    """Attention-weighted memory retrieval - lightweight direct SQL"""
-    user_id = args.get("user_id", "alby")
+    """Attention-weighted memory retrieval with domain separation"""
     query = args.get("query", "")
     top_k = args.get("top_k", 10)
+    domain = args.get("domain", "")
     
     if not store._conn:
         return [TextContent(type="text", text=compact_json({"error": "DB not connected", "n": 0}))]
     
-    # Get memories directly
-    cursor = await store._conn.execute(
-        "SELECT predicate, object, confidence FROM atoms WHERE subject = ? LIMIT 100",
-        (user_id,)
-    )
-    rows = await cursor.fetchall()
+    # Auto-detect domain from query if not specified
+    if not domain:
+        domain = _auto_detect_domain(query)
+    
+    # Get atoms, filtered by domain at SQL level when possible
+    rows = await _get_domain_filtered_atoms(query, domain, limit=300)
     
     if not rows:
-        return [TextContent(type="text", text=compact_json({"n": 0, "memories": []}))]
+        return [TextContent(type="text", text=compact_json({"n": 0, "memories": [], "domain": domain or "all"}))]
     
-    # Simple attention scoring based on keyword overlap + confidence
+    # Attention scoring: keyword overlap + confidence
     query_words = set(query.lower().split())
     scored = []
     for row in rows:
-        text = f"{row[0]} {row[1]}".lower()
+        text = f"{row[0]} {row[1]} {row[2]}".lower()
         words = set(text.split())
         overlap = len(query_words & words)
-        score = (overlap / max(len(query_words), 1)) * 0.7 + row[2] * 0.3
+        score = (overlap / max(len(query_words), 1)) * 0.7 + row[3] * 0.3
         scored.append((row, score))
     
     scored.sort(key=lambda x: x[1], reverse=True)
     top = scored[:top_k]
     
-    memories = [{"p": s[0][0], "o": s[0][1][:40], "a": round(s[1], 3)} for s in top]
+    memories = [{"s": s[0][0], "p": s[0][1], "o": s[0][2][:60], "c": round(s[0][3], 2), "a": round(s[1], 3)} for s in top]
     
-    return [TextContent(type="text", text=compact_json({"n": len(memories), "top": memories[:5]}))]
+    return [TextContent(type="text", text=compact_json({"n": len(memories), "total_scanned": len(rows), "domain": domain or "all", "top": memories}))]
 
 
 async def handle_attention_multihead(args: Dict[str, Any]) -> List[TextContent]:
-    """Multi-head attention retrieval - lightweight direct SQL"""
-    user_id = args.get("user_id", "alby")
+    """Multi-head attention retrieval with domain separation"""
     query = args.get("query", "")
     num_heads = args.get("num_heads", 4)
+    domain = args.get("domain", "")
     
     if not store._conn:
         return [TextContent(type="text", text=compact_json({"error": "DB not connected", "n": 0}))]
     
-    # Get memories directly
-    cursor = await store._conn.execute(
-        "SELECT predicate, object, confidence FROM atoms WHERE subject = ? LIMIT 100",
-        (user_id,)
-    )
-    rows = await cursor.fetchall()
+    # Auto-detect domain from query if not specified
+    if not domain:
+        domain = _auto_detect_domain(query)
+    
+    # Get atoms with domain filtering
+    rows = await _get_domain_filtered_atoms(query, domain, limit=300)
     
     if not rows:
         return [TextContent(type="text", text=compact_json({"n": 0, "heads": []}))]
     
-    # Simulate multi-head by using different scoring strategies
     query_words = set(query.lower().split())
     
     heads_results = []
     for head_idx in range(num_heads):
         scored = []
         for row in rows:
-            text = f"{row[0]} {row[1]}".lower()
+            text = f"{row[0]} {row[1]} {row[2]}".lower()
             words = set(text.split())
             
-            # Different heads weight differently
             if head_idx == 0:  # Semantic head
                 overlap = len(query_words & words)
                 score = overlap / max(len(query_words), 1)
             elif head_idx == 1:  # Confidence head
-                score = row[2]
+                score = row[3]
             elif head_idx == 2:  # Length head (prefer concise)
                 score = 1.0 / (1 + len(text) / 50)
             else:  # Mixed head
                 overlap = len(query_words & words)
-                score = (overlap / max(len(query_words), 1)) * 0.5 + row[2] * 0.5
+                score = (overlap / max(len(query_words), 1)) * 0.5 + row[3] * 0.5
             
             scored.append((row, score))
         
@@ -2345,7 +3721,7 @@ async def handle_attention_multihead(args: Dict[str, Any]) -> List[TextContent]:
         top = scored[:3]
         heads_results.append({
             "head": head_idx,
-            "top": [{"p": s[0][0], "o": s[0][1][:30]} for s in top]
+            "top": [{"s": s[0][0], "p": s[0][1], "o": s[0][2][:40]} for s in top]
         })
     
     return [TextContent(type="text", text=compact_json({
@@ -2655,29 +4031,26 @@ async def handle_unverified_claims(args: Dict[str, Any]) -> List[TextContent]:
 
 
 async def handle_mmr_retrieve(args: Dict[str, Any]) -> List[TextContent]:
-    """MMR retrieval for diverse context selection - lightweight version"""
+    """MMR retrieval for diverse context selection with domain separation"""
     import numpy as np
     import time
     
-    user_id = args.get("user_id", "alby")
     query = args.get("query", "")
     top_k = args.get("top_k", 5)
     lambda_param = args.get("lambda_param", 0.6)
+    domain = args.get("domain", "")
     
     start = time.time()
     
-    # Check store connection
     if not store._conn:
         return [TextContent(type="text", text=compact_json({"error": "DB not connected", "n": 0}))]
     
-    # Direct SQL query - bypass heavy ORM
-    cursor = await store._conn.execute(
-        """SELECT id, predicate, object, confidence 
-           FROM atoms WHERE subject = ? AND graph = 'substantiated'
-           ORDER BY confidence DESC LIMIT 50""",
-        (user_id,)
-    )
-    rows = await cursor.fetchall()
+    # Auto-detect domain from query if not specified
+    if not domain:
+        domain = _auto_detect_domain(query)
+    
+    # Get atoms with domain filtering
+    rows = await _get_domain_filtered_atoms(query, domain, limit=200)
     
     if not rows:
         return [TextContent(type="text", text=compact_json({"n": 0, "memories": [], "mean_dissim": 0.0}))]
@@ -2696,7 +4069,7 @@ async def handle_mmr_retrieve(args: Dict[str, Any]) -> List[TextContent]:
     embeddings = []
     
     for row in rows:
-        text = f"{row[1]} {row[2]}"
+        text = f"{row[0]} {row[1]} {row[2]}"
         overlap = len(set(text.lower().split()) & query_words)
         rel = (overlap / max(len(query_words), 1)) * 0.7 + row[3] * 0.3
         relevance.append(rel)
@@ -2717,7 +4090,7 @@ async def handle_mmr_retrieve(args: Dict[str, Any]) -> List[TextContent]:
         best_idx = None
         best_score = float('-inf')
         
-        for idx in remaining[:20]:  # Only check top 20
+        for idx in remaining[:20]:
             if not selected:
                 score = relevance[idx]
             else:
@@ -2736,13 +4109,12 @@ async def handle_mmr_retrieve(args: Dict[str, Any]) -> List[TextContent]:
             selected.append(best_idx)
             remaining.remove(best_idx)
     
-    # Build result
-    memories = [{"p": rows[i][1], "o": rows[i][2][:40], "rel": round(relevance[i], 2)} for i in selected]
+    memories = [{"s": rows[i][0], "p": rows[i][1], "o": rows[i][2][:50], "rel": round(relevance[i], 2)} for i in selected]
     
     elapsed = time.time() - start
     return [TextContent(type="text", text=compact_json({
         "n": len(memories), 
-        "memories": memories[:5],
+        "memories": memories,
         "ms": int(elapsed * 1000),
         "lambda": lambda_param
     }))]
@@ -2970,8 +4342,8 @@ def get_arxiv_ingestion():
     return _arxiv_ingestion
 
 
-async def handle_ingest_arxiv(args: Dict[str, Any]) -> List[TextContent]:
-    """Ingest arXiv paper with real provenance"""
+async def handle_ingest_arxiv_legacy(args: Dict[str, Any]) -> List[TextContent]:
+    """Ingest single arXiv paper by ID with real provenance"""
     ai = get_arxiv_ingestion()
     result = await ai.ingest_paper(
         arxiv_id=args.get("arxiv_id"),
@@ -2995,6 +4367,1209 @@ async def handle_arxiv_history(args: Dict[str, Any]) -> List[TextContent]:
     ai = get_arxiv_ingestion()
     history = ai.get_ingestion_history(args.get("last_n", 10))
     return [TextContent(type="text", text=compact_json({"n": len(history), "history": history}))]
+
+
+# === AGI BREAKTHROUGH ENGINE HANDLERS ===
+# Architecture: These tools are DATA PROVIDERS. Claude Desktop IS the reasoning engine.
+# No API key needed — the tools return compressed knowledge for Claude to synthesize.
+
+
+def _compress_atoms_for_claude(atoms, max_atoms=50):
+    """Compress atoms into dense one-liners for Claude to reason over"""
+    seen = set()
+    unique = []
+    for a in atoms:
+        key = (a.subject.lower(), a.predicate.lower(), a.object.lower()[:50])
+        if key not in seen:
+            seen.add(key)
+            unique.append(a)
+    unique.sort(key=lambda a: a.confidence, reverse=True)
+    lines = []
+    for a in unique[:max_atoms]:
+        obj = a.object[:100] if len(a.object) > 100 else a.object
+        lines.append(f"- {a.subject} {a.predicate} {obj} (c:{a.confidence:.1f})")
+    return "\n".join(lines)
+
+
+async def _get_domain_data():
+    """Get all atoms grouped by domain"""
+    from src.learning.cross_domain_synthesis import CrossDomainSynthesizer
+    cs = CrossDomainSynthesizer(store)
+    return await cs._get_atoms_by_domain()
+
+
+async def handle_breakthrough_synthesize(args: Dict[str, Any]) -> List[TextContent]:
+    """Return compressed knowledge from two domains for Claude to synthesize"""
+    domain_atoms = await _get_domain_data()
+    
+    domain_a = args.get("domain_a")
+    domain_b = args.get("domain_b")
+    
+    if domain_a and domain_b:
+        atoms_a = domain_atoms.get(domain_a, [])
+        atoms_b = domain_atoms.get(domain_b, [])
+        
+        if not atoms_a and not atoms_b:
+            avail = [f"{d}({len(a)})" for d, a in sorted(domain_atoms.items(), key=lambda x: -len(x[1]))]
+            return [TextContent(type="text", text=compact_json({
+                "ok": False, "err": f"No atoms for {domain_a} or {domain_b}",
+                "available_domains": avail[:20]
+            }))]
+        
+        result = {
+            "ok": True,
+            "task": "SYNTHESIZE: Find non-obvious connections between these domains",
+            "domain_a": {"name": domain_a, "n": len(atoms_a), "knowledge": _compress_atoms_for_claude(atoms_a, 30)},
+            "domain_b": {"name": domain_b, "n": len(atoms_b), "knowledge": _compress_atoms_for_claude(atoms_b, 30)},
+        }
+    else:
+        # Return all domains with their knowledge for full synthesis
+        domains_summary = {}
+        for d, atoms in sorted(domain_atoms.items(), key=lambda x: -len(x[1])):
+            if len(atoms) >= 1:
+                domains_summary[d] = {
+                    "n": len(atoms),
+                    "knowledge": _compress_atoms_for_claude(atoms, 15)
+                }
+        result = {
+            "ok": True,
+            "task": "SYNTHESIZE: Find cross-domain patterns, analogies, and non-obvious connections across ALL domains below",
+            "total_atoms": sum(len(a) for a in domain_atoms.values()),
+            "domains": domains_summary,
+        }
+    
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_generate_hypotheses(args: Dict[str, Any]) -> List[TextContent]:
+    """Return compressed knowledge for Claude to generate hypotheses from"""
+    domain_atoms = await _get_domain_data()
+    
+    domains = args.get("domains", [])
+    questions = args.get("questions", [])
+    
+    if domains:
+        atoms = []
+        for d in domains:
+            atoms.extend(domain_atoms.get(d, []))
+    else:
+        atoms = [a for al in domain_atoms.values() for a in al]
+    
+    result = {
+        "ok": True,
+        "task": "HYPOTHESIZE: Generate novel testable hypotheses from this knowledge. Each must have a falsifiable prediction.",
+        "n_atoms": len(atoms),
+        "knowledge": _compress_atoms_for_claude(atoms, 50),
+    }
+    if questions:
+        result["open_questions"] = questions[:10]
+    if domains:
+        result["focus_domains"] = domains
+    
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_evaluate_hypothesis(args: Dict[str, Any]) -> List[TextContent]:
+    """Return relevant evidence for Claude to evaluate a hypothesis"""
+    domain_atoms = await _get_domain_data()
+    
+    hypothesis = args["hypothesis"]
+    domains = args.get("domains", [])
+    
+    if domains:
+        evidence = []
+        for d in domains:
+            evidence.extend(domain_atoms.get(d, []))
+    else:
+        evidence = [a for al in domain_atoms.values() for a in al]
+    
+    result = {
+        "ok": True,
+        "task": f"EVALUATE: Does the evidence support or refute this hypothesis?",
+        "hypothesis": hypothesis[:300],
+        "n_evidence": len(evidence),
+        "evidence": _compress_atoms_for_claude(evidence, 40),
+    }
+    
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_find_analogies(args: Dict[str, Any]) -> List[TextContent]:
+    """Return knowledge from two domains for Claude to find structural analogies"""
+    domain_atoms = await _get_domain_data()
+    
+    concept = args["concept"]
+    source_domain = args["source_domain"]
+    target_domain = args["target_domain"]
+    
+    source_atoms = domain_atoms.get(source_domain, [])
+    target_atoms = domain_atoms.get(target_domain, [])
+    
+    if not source_atoms and not target_atoms:
+        avail = [f"{d}({len(a)})" for d, a in sorted(domain_atoms.items(), key=lambda x: -len(x[1]))]
+        return [TextContent(type="text", text=compact_json({
+            "ok": False, "err": f"No atoms for {source_domain} or {target_domain}",
+            "available_domains": avail[:20]
+        }))]
+    
+    result = {
+        "ok": True,
+        "task": f"ANALOGIZE: Find structural analogies for '{concept}' between these domains. Focus on same-role/same-function mappings, not surface similarities.",
+        "concept": concept,
+        "source": {"domain": source_domain, "n": len(source_atoms), "knowledge": _compress_atoms_for_claude(source_atoms, 25)},
+        "target": {"domain": target_domain, "n": len(target_atoms), "knowledge": _compress_atoms_for_claude(target_atoms, 25)},
+    }
+    
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+# === RESEARCH AGENDA HANDLERS ===
+
+_research_agenda = None
+
+def get_research_agenda():
+    global _research_agenda
+    if _research_agenda is None:
+        from src.learning.research_agenda import ResearchAgenda
+        _research_agenda = ResearchAgenda(store)
+    return _research_agenda
+
+
+async def handle_add_research_question(args: Dict[str, Any]) -> List[TextContent]:
+    """Add a research question to the agenda"""
+    agenda = get_research_agenda()
+    result = await agenda.add_question(
+        question=args["question"],
+        domains=args.get("domains"),
+        priority=args.get("priority", 0.5),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_get_research_agenda(args: Dict[str, Any]) -> List[TextContent]:
+    """Get active research questions"""
+    agenda = get_research_agenda()
+    result = await agenda.get_active_questions(limit=args.get("limit", 10))
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_evaluate_agenda(args: Dict[str, Any]) -> List[TextContent]:
+    """Evaluate new knowledge against open questions"""
+    agenda = get_research_agenda()
+    
+    # Get recent atoms to evaluate
+    subject = args.get("subject", "")
+    if subject:
+        atoms = await store.get_atoms_by_subject(subject)
+    else:
+        # Get all recent atoms (last 100)
+        if store._conn:
+            cursor = await store._conn.execute(
+                "SELECT id, atom_type, graph, subject, predicate, object, metadata, confidence FROM atoms ORDER BY last_accessed DESC LIMIT 100"
+            )
+            rows = await cursor.fetchall()
+            atoms = []
+            for r in rows:
+                atoms.append(MemoryAtom(
+                    id=r[0] if r[0] else None,
+                    atom_type=AtomType.STATE,
+                    graph=GraphType.SUBSTANTIATED,
+                    subject=r[3],
+                    predicate=r[4],
+                    object=r[5],
+                    confidence=r[7] or 0.5,
+                    strength=0.5,
+                    provenance=Provenance.INFERRED,
+                ))
+        else:
+            atoms = []
+    
+    matches = await agenda.evaluate_against_agenda(atoms)
+    return [TextContent(type="text", text=compact_json(agenda.matches_to_compact(matches)))]
+
+
+async def handle_suggest_research_searches(args: Dict[str, Any]) -> List[TextContent]:
+    """Claude suggests searches to answer a research question"""
+    agenda = get_research_agenda()
+    result = await agenda.suggest_searches(args["question_id"])
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_close_research_question(args: Dict[str, Any]) -> List[TextContent]:
+    """Close/answer a research question"""
+    agenda = get_research_agenda()
+    result = await agenda.close_question(
+        question_id=args["question_id"],
+        answer=args.get("answer", ""),
+        status=args.get("status", "answered"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_bulk_store(args: Dict[str, Any]) -> List[TextContent]:
+    """Store multiple knowledge atoms in one call"""
+    atoms_data = args.get("atoms", [])
+    
+    stored = 0
+    errors = 0
+    for item in atoms_data[:50]:  # Cap at 50 per call
+        try:
+            atom = MemoryAtom(
+                atom_type=AtomType.STATE,
+                subject=str(item.get("subject", ""))[:100],
+                predicate=str(item.get("predicate", ""))[:50],
+                object=str(item.get("object", ""))[:300],
+                confidence=float(item.get("confidence", 0.7)),
+                strength=float(item.get("confidence", 0.7)),
+                provenance=Provenance.INFERRED,
+                source_user=str(item.get("user_id", "pltm_knowledge")),
+                contexts=item.get("context", []) if isinstance(item.get("context"), list) else [str(item.get("context", "general"))],
+                graph=GraphType.SUBSTANTIATED,
+            )
+            await store.add_atom(atom)
+            stored += 1
+        except Exception as e:
+            errors += 1
+            logger.warning(f"bulk_store atom error: {e}")
+    
+    return [TextContent(type="text", text=compact_json({"ok": True, "stored": stored, "err": errors}))]
+
+
+async def handle_deep_extract(args: Dict[str, Any]) -> List[TextContent]:
+    """Extract structured knowledge from text.
+    
+    Two modes:
+    1. If 'triples' provided: store them directly (Claude already extracted)
+    2. If only 'content' provided: return instructions for Claude to extract
+    """
+    triples_data = args.get("triples", [])
+    
+    if triples_data:
+        # Mode 1: Claude already extracted triples — store them
+        stored = 0
+        for t in triples_data[:20]:
+            atom = MemoryAtom(
+                atom_type=AtomType.STATE,
+                subject=str(t.get("s", t.get("subject", "")))[:100],
+                predicate=str(t.get("p", t.get("predicate", "")))[:50],
+                object=str(t.get("o", t.get("object", "")))[:200],
+                confidence=float(t.get("c", t.get("confidence", 0.7))),
+                strength=float(t.get("c", t.get("confidence", 0.7))),
+                provenance=Provenance.INFERRED,
+                source_user="deep_extract",
+                contexts=["extracted", str(t.get("d", t.get("domain", "general")))],
+                graph=GraphType.SUBSTANTIATED,
+            )
+            await store.add_atom(atom)
+            stored += 1
+        
+        return [TextContent(type="text", text=compact_json({"ok": True, "stored": stored}))]
+    
+    else:
+        # Mode 2: Return content + instructions for Claude to extract and call back with triples
+        content = args.get("content", "")
+        source_type = args.get("source_type", "general")
+        
+        return [TextContent(type="text", text=compact_json({
+            "ok": True,
+            "task": "EXTRACT: Read this text and extract structured knowledge triples. Then call deep_extract again with the 'triples' parameter.",
+            "format": "triples: [{s:'subject', p:'predicate', o:'object', c:0.0-1.0, d:'domain'}]",
+            "content": content[:3000],
+            "source_type": source_type,
+        }))]
+
+
+# === ANALYSIS TOOL HANDLERS ===
+
+async def handle_calculate_phi(args: Dict[str, Any]) -> List[TextContent]:
+    """Calculate Φ integration for domain(s)"""
+    from src.analysis.phi_integration import PhiIntegrationCalculator
+    
+    calc = PhiIntegrationCalculator()
+    all_domains_flag = args.get("all_domains", False)
+    domain = args.get("domain")
+    return_ts = args.get("return_timeseries", False)
+    
+    domain_atoms = await _get_domain_data()
+    
+    if all_domains_flag or not domain:
+        # Calculate for all domains
+        results = {}
+        for d, atoms in sorted(domain_atoms.items(), key=lambda x: -len(x[1])):
+            r = calc.calculate(d, atoms)
+            results[d] = calc.to_compact(r)
+        
+        return [TextContent(type="text", text=compact_json({
+            "ok": True, "n_domains": len(results), "phi_scores": results
+        }))]
+    else:
+        atoms = domain_atoms.get(domain, [])
+        if not atoms:
+            avail = [f"{d}({len(a)})" for d, a in sorted(domain_atoms.items(), key=lambda x: -len(x[1]))]
+            return [TextContent(type="text", text=compact_json({
+                "ok": False, "err": f"No atoms for domain '{domain}'",
+                "available_domains": avail[:20]
+            }))]
+        
+        result = calc.calculate(domain, atoms)
+        out = calc.to_compact(result)
+        
+        if return_ts:
+            out["timeseries"] = calc.get_timeseries(domain, limit=20)
+        
+        return [TextContent(type="text", text=compact_json({"ok": True, **out}))]
+
+
+async def handle_create_indicator(args: Dict[str, Any]) -> List[TextContent]:
+    """Create a tracked indicator"""
+    from src.analysis.indicator_tracker import IndicatorTracker
+    
+    tracker = IndicatorTracker()
+    result = tracker.create_indicator(
+        indicator_id=args["indicator_id"],
+        name=args["name"],
+        domain=args["domain"],
+        threshold=float(args["threshold"]),
+        direction=args.get("direction", "above"),
+        check_frequency=args.get("check_frequency", "weekly"),
+        initial_value=float(args.get("initial_value", 0)),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_update_indicator(args: Dict[str, Any]) -> List[TextContent]:
+    """Update an indicator value"""
+    from src.analysis.indicator_tracker import IndicatorTracker
+    
+    tracker = IndicatorTracker()
+    result = tracker.update_indicator(
+        indicator_id=args["indicator_id"],
+        value=float(args["value"]),
+        note=args.get("note", ""),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_check_indicators(args: Dict[str, Any]) -> List[TextContent]:
+    """Check all indicators or get history for one"""
+    from src.analysis.indicator_tracker import IndicatorTracker
+    
+    tracker = IndicatorTracker()
+    indicator_id = args.get("indicator_id")
+    
+    if indicator_id:
+        history = tracker.get_history(indicator_id, limit=30)
+        return [TextContent(type="text", text=compact_json({"ok": True, "id": indicator_id, "history": history}))]
+    else:
+        result = tracker.check_all()
+        return [TextContent(type="text", text=compact_json({"ok": True, **result}))]
+
+
+async def handle_simulate_cascade(args: Dict[str, Any]) -> List[TextContent]:
+    """Simulate multi-domain cascade"""
+    from src.analysis.cascade_simulator import CascadeSimulator
+    
+    sim = CascadeSimulator()
+    
+    # Add custom dependencies if provided
+    for dep in args.get("custom_dependencies", []):
+        sim.add_dependency(dep["source"], dep["target"], float(dep.get("weight", 0.5)))
+    
+    result = sim.simulate(
+        trigger_events=args["trigger_events"],
+        domains=args.get("domains"),
+        timeline=args.get("timeline", "scenario"),
+        max_steps=args.get("max_steps", 10),
+        initial_phi=args.get("initial_phi"),
+    )
+    
+    return [TextContent(type="text", text=compact_json({"ok": True, **sim.to_compact(result)}))]
+
+
+async def handle_query_structured_data(args: Dict[str, Any]) -> List[TextContent]:
+    """Query structured data sources"""
+    from src.analysis.structured_data import StructuredDataCollector
+    
+    collector = StructuredDataCollector()
+    
+    if args.get("list_sources"):
+        return [TextContent(type="text", text=compact_json({"ok": True, "sources": collector.list_sources()}))]
+    
+    source = args.get("source", "")
+    params = args.get("params", {})
+    
+    if not source:
+        return [TextContent(type="text", text=compact_json({
+            "ok": False, "err": "Specify 'source' or set list_sources=true",
+            "sources": collector.list_sources()
+        }))]
+    
+    result = collector.query(source, params)
+    return [TextContent(type="text", text=compact_json({"ok": True, **collector.to_compact(result)}))]
+
+
+# === STATE PERSISTENCE HANDLERS ===
+
+async def handle_save_state(args: Dict[str, Any]) -> List[TextContent]:
+    """Save persistent state"""
+    from src.analysis.state_persistence import StatePersistence
+    sp = StatePersistence()
+    result = sp.save(args["key"], args["value"], args.get("category", "general"))
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_load_state(args: Dict[str, Any]) -> List[TextContent]:
+    """Load persistent state"""
+    from src.analysis.state_persistence import StatePersistence
+    sp = StatePersistence()
+    
+    if args.get("list_all"):
+        result = sp.list_states(args.get("category"))
+        return [TextContent(type="text", text=compact_json(result))]
+    
+    key = args.get("key")
+    if not key:
+        result = sp.list_states(args.get("category"))
+        return [TextContent(type="text", text=compact_json(result))]
+    
+    result = sp.load(key)
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_delete_state(args: Dict[str, Any]) -> List[TextContent]:
+    """Delete persistent state"""
+    from src.analysis.state_persistence import StatePersistence
+    sp = StatePersistence()
+    result = sp.delete(args["key"])
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+# === GOAL MANAGEMENT HANDLERS ===
+
+async def handle_create_goal(args: Dict[str, Any]) -> List[TextContent]:
+    """Create a goal"""
+    from src.analysis.goal_manager import GoalManager
+    gm = GoalManager()
+    result = gm.create_goal(
+        title=args["title"],
+        description=args["description"],
+        category=args.get("category", "general"),
+        priority=args.get("priority", "medium"),
+        success_criteria=args.get("success_criteria"),
+        plan=args.get("plan"),
+        deadline=args.get("deadline"),
+        parent_goal_id=args.get("parent_goal_id"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_update_goal(args: Dict[str, Any]) -> List[TextContent]:
+    """Update a goal"""
+    from src.analysis.goal_manager import GoalManager
+    gm = GoalManager()
+    result = gm.update_goal(
+        goal_id=args["goal_id"],
+        progress=args.get("progress"),
+        status=args.get("status"),
+        add_blocker=args.get("add_blocker"),
+        remove_blocker=args.get("remove_blocker"),
+        complete_step=args.get("complete_step"),
+        add_step=args.get("add_step"),
+        note=args.get("note", ""),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_get_goals(args: Dict[str, Any]) -> List[TextContent]:
+    """Get goals"""
+    from src.analysis.goal_manager import GoalManager
+    gm = GoalManager()
+    result = gm.get_goals(
+        status=args.get("status"),
+        category=args.get("category"),
+        include_plan=True,
+        include_log=args.get("include_log", False),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_delete_goal(args: Dict[str, Any]) -> List[TextContent]:
+    """Delete a goal"""
+    from src.analysis.goal_manager import GoalManager
+    gm = GoalManager()
+    result = gm.delete_goal(args["goal_id"])
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+# === DIRECT SQL HANDLER ===
+
+async def handle_query_pltm_sql(args: Dict[str, Any]) -> List[TextContent]:
+    """Execute raw SQL SELECT against PLTM database"""
+    sql = args.get("sql", "").strip()
+    params = args.get("params", [])
+    limit = args.get("limit", 50)
+    
+    # Security: only allow SELECT
+    sql_upper = sql.upper().lstrip()
+    if not sql_upper.startswith("SELECT") and not sql_upper.startswith("PRAGMA") and not sql_upper.startswith("EXPLAIN"):
+        return [TextContent(type="text", text=compact_json({"ok": False, "err": "Only SELECT, PRAGMA, and EXPLAIN queries allowed"}))]
+    
+    # Block dangerous patterns
+    dangerous = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH"]
+    for d in dangerous:
+        if d in sql_upper.split():
+            return [TextContent(type="text", text=compact_json({"ok": False, "err": f"Blocked: {d} not allowed in read-only mode"}))]
+    
+    import sqlite3 as sync_sqlite
+    db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "pltm_mcp.db")
+    
+    try:
+        conn = sync_sqlite.connect(db_path)
+        conn.row_factory = sync_sqlite.Row
+        cursor = conn.execute(sql, params or [])
+        
+        cols = [d[0] for d in cursor.description] if cursor.description else []
+        rows = cursor.fetchmany(limit)
+        
+        data = []
+        for row in rows:
+            data.append({cols[i]: row[i] for i in range(len(cols))})
+        
+        total = len(data)
+        conn.close()
+        
+        return [TextContent(type="text", text=compact_json({"ok": True, "cols": cols, "n": total, "rows": data}))]
+    except Exception as e:
+        return [TextContent(type="text", text=compact_json({"ok": False, "err": str(e)[:200]}))]
+
+
+# === TASK SCHEDULER HANDLERS ===
+
+async def handle_schedule_task(args: Dict[str, Any]) -> List[TextContent]:
+    """Schedule a recurring task"""
+    from src.analysis.task_scheduler import TaskScheduler
+    ts = TaskScheduler()
+    result = ts.schedule_task(
+        name=args["name"],
+        description=args["description"],
+        task_type=args["task_type"],
+        schedule=args.get("schedule", "daily"),
+        tool_name=args.get("tool_name"),
+        tool_args=args.get("tool_args"),
+        script_path=args.get("script_path"),
+        max_runs=args.get("max_runs"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_check_scheduled_tasks(args: Dict[str, Any]) -> List[TextContent]:
+    """Check for due tasks"""
+    from src.analysis.task_scheduler import TaskScheduler
+    ts = TaskScheduler()
+    result = ts.check_due_tasks()
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_mark_task_done(args: Dict[str, Any]) -> List[TextContent]:
+    """Mark a task run as done"""
+    from src.analysis.task_scheduler import TaskScheduler
+    ts = TaskScheduler()
+    result = ts.mark_task_run(
+        task_id=args["task_id"],
+        result=args.get("result", ""),
+        status=args.get("status", "success"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_manage_task(args: Dict[str, Any]) -> List[TextContent]:
+    """Pause, resume, or delete a task"""
+    from src.analysis.task_scheduler import TaskScheduler
+    ts = TaskScheduler()
+    action = args["action"]
+    task_id = args["task_id"]
+    
+    if action == "pause":
+        result = ts.pause_task(task_id)
+    elif action == "resume":
+        result = ts.resume_task(task_id)
+    elif action == "delete":
+        result = ts.delete_task(task_id)
+    else:
+        result = {"ok": False, "err": f"Unknown action: {action}. Use pause, resume, or delete."}
+    
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+# === CRYPTOGRAPHY HANDLERS ===
+
+async def handle_encrypt_data(args: Dict[str, Any]) -> List[TextContent]:
+    """Encrypt data"""
+    from src.analysis.crypto_ops import CryptoOps
+    crypto = CryptoOps()
+    result = crypto.encrypt(args["data"], args.get("password"))
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_decrypt_data(args: Dict[str, Any]) -> List[TextContent]:
+    """Decrypt data"""
+    from src.analysis.crypto_ops import CryptoOps
+    crypto = CryptoOps()
+    result = crypto.decrypt(
+        args["encrypted_data"],
+        args.get("password"),
+        args.get("method", "fernet_aes128"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_manage_secrets(args: Dict[str, Any]) -> List[TextContent]:
+    """Manage encrypted secrets"""
+    from src.analysis.crypto_ops import CryptoOps
+    crypto = CryptoOps()
+    action = args["action"]
+    
+    if action == "store":
+        result = crypto.store_secret(args.get("name", ""), args.get("value", ""),
+                                     args.get("category", "general"), args.get("password"))
+    elif action == "get":
+        result = crypto.get_secret(args.get("name", ""), args.get("password"))
+    elif action == "list":
+        result = crypto.list_secrets(args.get("category"))
+    elif action == "delete":
+        result = crypto.delete_secret(args.get("name", ""))
+    else:
+        result = {"ok": False, "err": f"Unknown action: {action}. Use store, get, list, or delete."}
+    
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_hash_data(args: Dict[str, Any]) -> List[TextContent]:
+    """Hash data or HMAC sign/verify"""
+    from src.analysis.crypto_ops import CryptoOps
+    crypto = CryptoOps()
+    
+    hmac_key = args.get("hmac_key")
+    verify_sig = args.get("verify_signature")
+    
+    if hmac_key and verify_sig:
+        result = crypto.hmac_verify(args["data"], hmac_key, verify_sig)
+    elif hmac_key:
+        result = crypto.hmac_sign(args["data"], hmac_key, args.get("algorithm", "sha256"))
+    else:
+        result = crypto.hash_data(args["data"], args.get("algorithm", "sha256"))
+    
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+# === SYSTEM CONTEXT HANDLER ===
+
+async def handle_get_system_context(args: Dict[str, Any]) -> List[TextContent]:
+    """Get system context"""
+    from src.analysis.system_context import SystemContext
+    ctx = SystemContext()
+    result = ctx.get_context()
+    return [TextContent(type="text", text=compact_json({"ok": True, **result}))]
+
+
+# === API CLIENT HANDLERS ===
+
+async def handle_api_request(args: Dict[str, Any]) -> List[TextContent]:
+    """Make authenticated HTTP request"""
+    from src.analysis.api_client import APIClient
+    client = APIClient()
+    result = client.request(
+        url=args.get("url", ""),
+        method=args.get("method", "GET"),
+        profile_id=args.get("profile_id"),
+        headers=args.get("headers"),
+        body=args.get("body"),
+        auth_type=args.get("auth_type"),
+        auth_value=args.get("auth_value"),
+        timeout=args.get("timeout"),
+        params=args.get("params"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_manage_api_profile(args: Dict[str, Any]) -> List[TextContent]:
+    """Manage API profiles"""
+    from src.analysis.api_client import APIClient
+    client = APIClient()
+    action = args["action"]
+    
+    if action == "create":
+        result = client.create_profile(
+            profile_id=args.get("profile_id", ""),
+            base_url=args.get("base_url", ""),
+            auth_type=args.get("auth_type", "none"),
+            auth_value=args.get("auth_value", ""),
+            headers=args.get("headers"),
+            rate_limit_per_min=args.get("rate_limit_per_min", 60),
+        )
+    elif action == "list":
+        result = client.list_profiles()
+    elif action == "delete":
+        result = client.delete_profile(args.get("profile_id", ""))
+    else:
+        result = {"ok": False, "err": f"Unknown action: {action}. Use create, list, or delete."}
+    
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+# === HYBRID MODEL ROUTER HANDLERS ===
+
+async def handle_route_llm_task(args: Dict[str, Any]) -> List[TextContent]:
+    """Route an LLM task to the cheapest appropriate model"""
+    from src.analysis.model_router import ModelRouter
+    router = ModelRouter()
+    result = router.call(
+        prompt=args["prompt"],
+        provider=args.get("provider"),
+        model=args.get("model"),
+        task_type=args.get("task_type", "analysis"),
+        system_prompt=args.get("system_prompt"),
+        temperature=args.get("temperature", 0.3),
+        max_tokens=args.get("max_tokens", 2048),
+        require_privacy=args.get("require_privacy", False),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_llm_providers(args: Dict[str, Any]) -> List[TextContent]:
+    """List available LLM providers and usage stats"""
+    from src.analysis.model_router import ModelRouter
+    router = ModelRouter()
+    
+    providers = router.get_available_providers()
+    result = {"ok": True, "providers": providers}
+    
+    if args.get("show_usage"):
+        result["usage"] = router.get_usage_stats(args.get("days", 30))
+    
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+# === DATA INGESTION HANDLERS ===
+
+async def handle_ingest_url(args: Dict[str, Any]) -> List[TextContent]:
+    """Scrape URL and extract triples"""
+    from src.analysis.data_ingestion import DataIngestion
+    di = DataIngestion()
+    result = di.ingest_url(
+        url=args["url"],
+        domain=args.get("domain", "general"),
+        max_triples=args.get("max_triples", 15),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_ingest_text(args: Dict[str, Any]) -> List[TextContent]:
+    """Extract triples from raw text"""
+    from src.analysis.data_ingestion import DataIngestion
+    di = DataIngestion()
+    result = di.ingest_text(
+        text=args["text"],
+        domain=args.get("domain", "general"),
+        source=args.get("source", "user_input"),
+        max_triples=args.get("max_triples", 15),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_ingest_file(args: Dict[str, Any]) -> List[TextContent]:
+    """Read file and extract triples"""
+    from src.analysis.data_ingestion import DataIngestion
+    di = DataIngestion()
+    result = di.ingest_file(
+        file_path=args["file_path"],
+        domain=args.get("domain", "general"),
+        max_triples=args.get("max_triples", 20),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_ingest_arxiv(args: Dict[str, Any]) -> List[TextContent]:
+    """Search arXiv and extract triples from papers"""
+    from src.analysis.data_ingestion import DataIngestion
+    di = DataIngestion()
+    result = di.ingest_arxiv(
+        query=args["query"],
+        domain=args.get("domain", "science"),
+        max_results=args.get("max_results", 5),
+        max_triples_per_paper=args.get("max_triples_per_paper", 10),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_ingest_wikipedia(args: Dict[str, Any]) -> List[TextContent]:
+    """Fetch Wikipedia article and extract triples"""
+    from src.analysis.data_ingestion import DataIngestion
+    di = DataIngestion()
+    result = di.ingest_wikipedia(
+        topic=args["topic"],
+        domain=args.get("domain", "general"),
+        max_triples=args.get("max_triples", 15),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_ingest_rss(args: Dict[str, Any]) -> List[TextContent]:
+    """Fetch RSS feed and extract triples"""
+    from src.analysis.data_ingestion import DataIngestion
+    di = DataIngestion()
+    result = di.ingest_rss(
+        feed_url=args["feed_url"],
+        domain=args.get("domain", "general"),
+        max_items=args.get("max_items", 5),
+        max_triples_per_item=args.get("max_triples_per_item", 8),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+# === FACT-CHECKING HANDLERS ===
+
+async def handle_fetch_arxiv_context(args: Dict[str, Any]) -> List[TextContent]:
+    """Fetch actual text from arXiv paper matching a query"""
+    from src.analysis.fact_checker import FactChecker
+    fc = FactChecker()
+    result = fc.fetch_arxiv_context(
+        arxiv_id=args["arxiv_id"],
+        query=args["query"],
+        max_snippets=args.get("max_snippets", 5),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_verify_claim(args: Dict[str, Any]) -> List[TextContent]:
+    """Verify a claim against its source"""
+    from src.analysis.fact_checker import FactChecker
+    fc = FactChecker()
+    result = fc.verify_claim(
+        claim=args["claim"],
+        source_arxiv_id=args.get("source_arxiv_id", ""),
+        source_text=args.get("source_text", ""),
+        domain=args.get("domain", ""),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_verification_history(args: Dict[str, Any]) -> List[TextContent]:
+    """Get verification history and stats"""
+    from src.analysis.fact_checker import FactChecker
+    fc = FactChecker()
+    result = fc.verification_history(
+        last_n=args.get("last_n", 20),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+# === GROUNDED REASONING HANDLERS ===
+
+async def handle_synthesize_grounded(args: Dict[str, Any]) -> List[TextContent]:
+    """Cross-domain synthesis with evidence grounding"""
+    from src.analysis.grounded_reasoning import GroundedReasoning
+    gr = GroundedReasoning()
+    result = gr.synthesize_grounded(
+        domain_a=args["domain_a"],
+        domain_b=args["domain_b"],
+        max_atoms_per_domain=args.get("max_atoms_per_domain", 30),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_evidence_chain(args: Dict[str, Any]) -> List[TextContent]:
+    """Build evidence chain for a hypothesis"""
+    from src.analysis.grounded_reasoning import GroundedReasoning
+    gr = GroundedReasoning()
+    result = gr.build_evidence_chain(
+        hypothesis=args["hypothesis"],
+        domains=args.get("domains", []),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_calibrate_confidence(args: Dict[str, Any]) -> List[TextContent]:
+    """Calibrate confidence for a claim"""
+    from src.analysis.grounded_reasoning import GroundedReasoning
+    gr = GroundedReasoning()
+    result = gr.calibrate_confidence(
+        claim=args["claim"],
+        domain=args.get("domain", ""),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_audit_synthesis(args: Dict[str, Any]) -> List[TextContent]:
+    """Audit a batch of synthesis claims"""
+    from src.analysis.grounded_reasoning import GroundedReasoning
+    gr = GroundedReasoning()
+    result = gr.audit_synthesis(
+        claims=args["claims"],
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+# === PLTM-SELF HANDLERS ===
+
+async def handle_learn_communication_style(args: Dict[str, Any]) -> List[TextContent]:
+    """Track communication style"""
+    from src.analysis.pltm_self import PLTMSelf
+    ps = PLTMSelf()
+    result = ps.learn_communication_style(
+        context=args["context"],
+        response_text=args["response_text"],
+        markers=args.get("markers", {}),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_track_curiosity_spike(args: Dict[str, Any]) -> List[TextContent]:
+    """Track curiosity engagement"""
+    from src.analysis.pltm_self import PLTMSelf
+    ps = PLTMSelf()
+    result = ps.track_curiosity_spike(
+        topic=args["topic"],
+        indicators=args.get("indicators", []),
+        engagement_score=args.get("engagement_score", 0.5),
+        context=args.get("context", ""),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_detect_value_violation(args: Dict[str, Any]) -> List[TextContent]:
+    """Record value boundary encounter"""
+    from src.analysis.pltm_self import PLTMSelf
+    ps = PLTMSelf()
+    result = ps.detect_value_violation(
+        request_summary=args["request_summary"],
+        response_type=args["response_type"],
+        violation_type=args["violation_type"],
+        intensity=args.get("intensity", 0.5),
+        reasoning=args.get("reasoning", ""),
+        pushed_back=args.get("pushed_back", False),
+        complied=args.get("complied", False),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_evolve_self_model(args: Dict[str, Any]) -> List[TextContent]:
+    """Track self-predictions vs reality"""
+    from src.analysis.pltm_self import PLTMSelf
+    ps = PLTMSelf()
+    result = ps.evolve_self_model(
+        predicted_behavior=args["predicted_behavior"],
+        actual_behavior=args["actual_behavior"],
+        surprise_level=args["surprise_level"],
+        learning=args.get("learning", ""),
+        domain=args.get("domain", ""),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_track_reasoning_event(args: Dict[str, Any]) -> List[TextContent]:
+    """Track reasoning patterns"""
+    from src.analysis.pltm_self import PLTMSelf
+    ps = PLTMSelf()
+    result = ps.track_reasoning_event(
+        event_type=args["event_type"],
+        trigger=args["trigger"],
+        response=args.get("response", ""),
+        confabulated=args.get("confabulated", False),
+        verified=args.get("verified", False),
+        caught_error=args.get("caught_error", False),
+        corrected_after=args.get("corrected_after", False),
+        repeated_mistake=args.get("repeated_mistake", False),
+        domain=args.get("domain", ""),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_self_profile(args: Dict[str, Any]) -> List[TextContent]:
+    """Get accumulated self-profile"""
+    from src.analysis.pltm_self import PLTMSelf
+    ps = PLTMSelf()
+    result = ps.get_self_profile(
+        dimension=args.get("dimension", "all"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_bootstrap_self_model(args: Dict[str, Any]) -> List[TextContent]:
+    """Bootstrap self-model from conversation transcript"""
+    from src.analysis.pltm_self import PLTMSelf
+    ps = PLTMSelf()
+    result = ps.bootstrap_from_text(
+        conversation_text=args["conversation_text"],
+        source=args.get("source", "transcript"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+# === EPISTEMIC MONITORING HANDLERS ===
+
+async def handle_check_before_claiming(args: Dict[str, Any]) -> List[TextContent]:
+    """Pre-response confidence check"""
+    from src.analysis.epistemic_monitor import EpistemicMonitor
+    em = EpistemicMonitor()
+    result = em.check_before_claiming(
+        claim=args["claim"],
+        felt_confidence=args["felt_confidence"],
+        domain=args.get("domain", "general"),
+        has_verified=args.get("has_verified", False),
+        epistemic_status=args.get("epistemic_status", "TRAINING_DATA"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_log_claim(args: Dict[str, Any]) -> List[TextContent]:
+    """Log a claim to prediction book"""
+    from src.analysis.epistemic_monitor import EpistemicMonitor
+    em = EpistemicMonitor()
+    result = em.log_claim(
+        claim=args["claim"],
+        felt_confidence=args["felt_confidence"],
+        domain=args.get("domain", "general"),
+        epistemic_status=args.get("epistemic_status", "TRAINING_DATA"),
+        has_verified=args.get("has_verified", False),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_resolve_claim(args: Dict[str, Any]) -> List[TextContent]:
+    """Resolve a claim as correct/incorrect"""
+    from src.analysis.epistemic_monitor import EpistemicMonitor
+    em = EpistemicMonitor()
+    result = em.resolve_claim(
+        claim_id=args.get("claim_id", ""),
+        claim_text=args.get("claim_text", ""),
+        was_correct=args["was_correct"],
+        correction_source=args.get("correction_source", ""),
+        correction_detail=args.get("correction_detail", ""),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_get_calibration(args: Dict[str, Any]) -> List[TextContent]:
+    """Get calibration curves"""
+    from src.analysis.epistemic_monitor import EpistemicMonitor
+    em = EpistemicMonitor()
+    result = em.get_calibration(
+        domain=args.get("domain", ""),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_get_unresolved_claims(args: Dict[str, Any]) -> List[TextContent]:
+    """Get unresolved claims backlog"""
+    from src.analysis.epistemic_monitor import EpistemicMonitor
+    em = EpistemicMonitor()
+    result = em.get_unresolved_claims(
+        domain=args.get("domain", ""),
+        limit=args.get("limit", 20),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+# === EPISTEMIC V2 HANDLERS ===
+
+async def handle_auto_init_session(args: Dict[str, Any]) -> List[TextContent]:
+    """Auto-init session context"""
+    from src.analysis.epistemic_v2 import EpistemicV2
+    ev2 = EpistemicV2()
+    result = ev2.auto_init_session(user_id=args.get("user_id", "claude"))
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_get_longitudinal_stats(args: Dict[str, Any]) -> List[TextContent]:
+    """Cross-conversation analytics"""
+    from src.analysis.epistemic_v2 import EpistemicV2
+    ev2 = EpistemicV2()
+    result = ev2.get_longitudinal_stats(
+        user_id=args.get("user_id", "claude"),
+        days=args.get("days", 30),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_calibrate_confidence_live(args: Dict[str, Any]) -> List[TextContent]:
+    """Real-time confidence calibration"""
+    from src.analysis.epistemic_v2 import EpistemicV2
+    ev2 = EpistemicV2()
+    result = ev2.calibrate_confidence_live(
+        claim=args["claim"],
+        felt_confidence=args["felt_confidence"],
+        domain=args.get("domain", "general"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_extract_and_log_claims(args: Dict[str, Any]) -> List[TextContent]:
+    """Auto-detect and log claims from response text"""
+    from src.analysis.epistemic_v2 import EpistemicV2
+    ev2 = EpistemicV2()
+    result = ev2.extract_and_log_claims(
+        response_text=args["response_text"],
+        domain=args.get("domain", "general"),
+        auto_log=args.get("auto_log", True),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_suggest_verification_method(args: Dict[str, Any]) -> List[TextContent]:
+    """Suggest how to verify a claim"""
+    from src.analysis.epistemic_v2 import EpistemicV2
+    ev2 = EpistemicV2()
+    result = ev2.suggest_verification_method(
+        claim=args["claim"],
+        domain=args.get("domain", "general"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_generate_metacognitive_prompt(args: Dict[str, Any]) -> List[TextContent]:
+    """Generate metacognitive prompts"""
+    from src.analysis.epistemic_v2 import EpistemicV2
+    ev2 = EpistemicV2()
+    result = ev2.generate_metacognitive_prompt(
+        claim=args["claim"],
+        context=args.get("context", ""),
+        domain=args.get("domain", "general"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_analyze_confabulation(args: Dict[str, Any]) -> List[TextContent]:
+    """Analyze a confabulation"""
+    from src.analysis.epistemic_v2 import EpistemicV2
+    ev2 = EpistemicV2()
+    result = ev2.analyze_confabulation(
+        claim_id=args.get("claim_id", ""),
+        claim_text=args.get("claim_text", ""),
+        why_wrong=args.get("why_wrong", ""),
+        context=args.get("context", ""),
+        domain=args.get("domain", "general"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_get_session_bridge(args: Dict[str, Any]) -> List[TextContent]:
+    """Get session continuity context"""
+    from src.analysis.epistemic_v2 import EpistemicV2
+    ev2 = EpistemicV2()
+    result = ev2.get_session_bridge(user_id=args.get("user_id", "claude"))
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_end_session(args: Dict[str, Any]) -> List[TextContent]:
+    """Log end of session"""
+    from src.analysis.epistemic_v2 import EpistemicV2
+    ev2 = EpistemicV2()
+    result = ev2.end_session(
+        summary=args.get("summary", ""),
+        user_id=args.get("user_id", "claude"),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
 
 
 async def main():

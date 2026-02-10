@@ -92,7 +92,106 @@ class ContinuousLearningLoop:
         # Data fetchers (to be provided externally or mocked)
         self.data_fetchers: Dict[str, Callable] = {}
         
+        # Register built-in fetchers
+        self._register_builtin_fetchers()
+        
         logger.info("ContinuousLearningLoop initialized")
+    
+    def _register_builtin_fetchers(self):
+        """Register built-in data fetchers for arXiv, news, and GitHub"""
+        
+        async def fetch_arxiv_latest():
+            """Fetch latest AI/ML papers from arXiv"""
+            try:
+                from src.learning.arxiv_ingestion import ArxivIngestion
+                ai = ArxivIngestion(self.store)
+                results = await ai.search_arxiv(
+                    query="cat:cs.AI OR cat:cs.LG OR cat:cs.CL",
+                    max_results=5
+                )
+                # Convert search results to paper format for batch ingestion
+                papers = []
+                for r in results[:5]:
+                    paper = await ai.fetch_paper(r.get("id", ""))
+                    if paper:
+                        papers.append({
+                            "id": paper.arxiv_id,
+                            "title": paper.title,
+                            "abstract": paper.abstract,
+                            "content": paper.abstract,  # Use abstract as content
+                            "authors": paper.authors,
+                            "published": paper.published,
+                        })
+                return papers
+            except Exception as e:
+                logger.warning(f"ArXiv fetcher failed: {e}")
+                return []
+        
+        async def fetch_news_feed():
+            """Fetch news from RSS feeds"""
+            try:
+                import urllib.request
+                import xml.etree.ElementTree as ET
+                
+                feeds = [
+                    "https://news.ycombinator.com/rss",
+                    "https://rss.arxiv.org/rss/cs.AI",
+                ]
+                
+                articles = []
+                for feed_url in feeds:
+                    try:
+                        with urllib.request.urlopen(feed_url, timeout=10) as resp:
+                            xml_data = resp.read().decode("utf-8")
+                        root = ET.fromstring(xml_data)
+                        
+                        for item in root.findall(".//item")[:3]:
+                            title = item.find("title")
+                            desc = item.find("description")
+                            link = item.find("link")
+                            if title is not None:
+                                articles.append({
+                                    "title": title.text or "",
+                                    "content": (desc.text or "")[:2000] if desc is not None else "",
+                                    "url": link.text or "" if link is not None else "",
+                                })
+                    except Exception:
+                        continue
+                
+                return articles
+            except Exception as e:
+                logger.warning(f"News fetcher failed: {e}")
+                return []
+        
+        async def fetch_github_trending():
+            """Fetch trending repos from GitHub API"""
+            try:
+                import urllib.request
+                import json as _json
+                
+                url = "https://api.github.com/search/repositories?q=stars:>100+pushed:>2025-01-01+language:python&sort=stars&order=desc&per_page=3"
+                req = urllib.request.Request(url, headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "PLTM/1.0"})
+                
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = _json.loads(resp.read().decode("utf-8"))
+                
+                repos = []
+                for item in data.get("items", [])[:3]:
+                    repos.append({
+                        "url": item.get("html_url", ""),
+                        "name": item.get("full_name", ""),
+                        "description": item.get("description", "")[:500],
+                        "languages": [item.get("language", "Python")],
+                        "code_samples": [],  # Would need deeper API calls
+                    })
+                return repos
+            except Exception as e:
+                logger.warning(f"GitHub fetcher failed: {e}")
+                return []
+        
+        self.data_fetchers["arxiv_latest"] = fetch_arxiv_latest
+        self.data_fetchers["news_feed"] = fetch_news_feed
+        self.data_fetchers["github_trending"] = fetch_github_trending
     
     def register_data_fetcher(self, task_name: str, fetcher: Callable):
         """Register a data fetcher function for a task"""

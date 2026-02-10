@@ -16,6 +16,7 @@ import re
 
 from src.storage.sqlite_store import SQLiteGraphStore
 from src.core.models import MemoryAtom, AtomType, Provenance, GraphType
+from src.learning.llm_synthesis import LLMSynthesizer
 from loguru import logger
 
 
@@ -68,6 +69,23 @@ class CrossDomainSynthesizer:
         self.store = store
         self.discovered_patterns: List[MetaPattern] = []
         self.discovered_insights: List[CrossDomainInsight] = []
+        self.llm_synthesizer = LLMSynthesizer(store)
+        
+        # Extended domain keywords for content-based classification fallback
+        self.domain_keywords_extended = {
+            "physics": ["quantum", "particle", "energy", "force", "wave", "relativity", "photon", "entropy"],
+            "biology": ["cell", "gene", "protein", "organism", "evolution", "dna", "species", "neural"],
+            "computer_science": ["algorithm", "software", "code", "data structure", "api", "computing"],
+            "ai_ml": ["neural network", "machine learning", "deep learning", "model", "training", "transformer"],
+            "economics": ["market", "trade", "gdp", "inflation", "supply", "demand", "fiscal"],
+            "mathematics": ["theorem", "proof", "equation", "function", "topology", "algebra"],
+            "military": ["military", "weapon", "defense", "army", "navy", "missile", "warfare", "troops"],
+            "geopolitics": ["nato", "alliance", "sanctions", "diplomacy", "territorial", "sovereignty"],
+            "security": ["cyber", "sabotage", "espionage", "intelligence", "threat", "vulnerability"],
+            "technology": ["semiconductor", "chip", "battery", "satellite", "drone", "autonomous"],
+            "energy": ["oil", "gas", "nuclear", "renewable", "pipeline", "energy"],
+            "climate": ["climate", "carbon", "emissions", "warming", "temperature"],
+        }
         
         # Known universal patterns to look for
         self.universal_pattern_templates = {
@@ -131,36 +149,66 @@ class CrossDomainSynthesizer:
         # Store discoveries
         await self._store_discoveries(patterns, insights)
         
+        # LLM-powered deep synthesis (if API key available)
+        llm_insights = await self._synthesize_with_llm(domain_atoms, patterns)
+        
         return {
             "ok": True,
             "domains": len(domain_atoms),
             "patterns": len(patterns),
             "insights": len(insights),
+            "llm_insights": len(llm_insights),
             "transfers": len(transfers),
             "top_patterns": [p.name for p in patterns[:5]],
-            "top_insights": [i.insight[:80] for i in insights[:3]]
+            "top_insights": [i.insight[:80] for i in insights[:3]],
+            "top_llm": [i.insight[:80] for i in llm_insights[:3]]
         }
     
     async def _get_atoms_by_domain(self) -> Dict[str, List[MemoryAtom]]:
         """Group all atoms by their domain context"""
         domain_atoms = defaultdict(list)
         
-        # Get atoms from various subjects that indicate learned content
-        # This is simplified - in production would have better domain indexing
+        # Get ALL atoms and classify by domain
+        all_atoms = await self.store.get_all_atoms()
         
-        # Query atoms with domain contexts
-        all_subjects = ["source:", "paper:", "repo:", "concept:"]
+        # Known domain names from templates + common domains
+        known_domains = set()
+        for template in self.universal_pattern_templates.values():
+            known_domains.update(template.get("domains", []))
+        known_domains.update([
+            "general", "research", "geopolitics", "military", "economics",
+            "technology", "security", "intelligence", "politics", "energy",
+            "climate", "health", "space", "cyber", "diplomacy",
+            "military_strategy", "infrastructure", "cascade_failure",
+        ])
         
-        for subject_prefix in all_subjects:
-            atoms = await self.store.get_atoms_by_subject(subject_prefix)
-            for atom in atoms:
-                # Extract domain from contexts
-                for ctx in atom.contexts:
-                    if ctx in self.universal_pattern_templates.get("feedback_loop", {}).get("domains", []):
-                        domain_atoms[ctx].append(atom)
-                    elif "_" not in ctx and len(ctx) > 3:
-                        # Likely a domain name
-                        domain_atoms[ctx].append(atom)
+        # Meta-tags to skip (not real domains)
+        skip_tags = {"llm_extracted", "llm_insight", "llm_hypothesis", "cross_domain", "insight"}
+        
+        for atom in all_atoms:
+            classified = False
+            
+            # 1. Check contexts for domain tags
+            for ctx in atom.contexts:
+                ctx_lower = ctx.lower()
+                if ctx_lower in skip_tags:
+                    continue
+                if ctx_lower in known_domains or (3 < len(ctx_lower) < 30):
+                    domain_atoms[ctx_lower].append(atom)
+                    classified = True
+            
+            # 2. Fallback: classify by keyword matching on content
+            if not classified:
+                text = f"{atom.subject} {atom.predicate} {atom.object}".lower()
+                for domain, keywords in self.domain_keywords_extended.items():
+                    if any(kw in text for kw in keywords):
+                        domain_atoms[domain].append(atom)
+                        classified = True
+                        break
+            
+            # 3. Last resort: put in "general"
+            if not classified:
+                domain_atoms["general"].append(atom)
         
         return dict(domain_atoms)
     
@@ -370,6 +418,137 @@ class CrossDomainSynthesizer:
         
         logger.info(f"Stored {len(patterns)} patterns and {min(len(insights), 20)} insights")
     
+    async def _synthesize_with_llm(
+        self,
+        domain_atoms: Dict[str, List[MemoryAtom]],
+        patterns: List[MetaPattern],
+    ) -> list:
+        """
+        Run LLM-powered synthesis across domain pairs.
+        
+        Batches domain pairs to minimize LLM calls.
+        Only runs if ANTHROPIC_API_KEY is set.
+        """
+        if not self.llm_synthesizer.enabled:
+            return []
+        
+        all_insights = []
+        domains = list(domain_atoms.keys())
+        
+        # Only synthesize across domain pairs that have enough atoms
+        pairs_processed = 0
+        for i, d1 in enumerate(domains):
+            if pairs_processed >= 5:  # Cap at 5 LLM calls per synthesis run
+                break
+            for d2 in domains[i + 1:]:
+                if pairs_processed >= 5:
+                    break
+                if len(domain_atoms[d1]) >= 3 and len(domain_atoms[d2]) >= 3:
+                    insights = await self.llm_synthesizer.synthesize_cross_domain(
+                        d1, d2, domain_atoms[d1], domain_atoms[d2]
+                    )
+                    all_insights.extend(insights)
+                    pairs_processed += 1
+        
+        if all_insights:
+            logger.info(f"LLM synthesis produced {len(all_insights)} insights from {pairs_processed} domain pairs")
+        
+        return all_insights
+
+    async def _find_semantic_bridges(
+        self,
+        domain_a: str,
+        domain_b: str,
+        atoms_a: List[MemoryAtom],
+        atoms_b: List[MemoryAtom],
+        top_k: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """
+        Find atoms that are semantically similar across domains but lexically different.
+        
+        Uses sentence-transformers when available, falls back to keyword overlap.
+        These bridges are prime candidates for cross-domain insights.
+        """
+        bridges = []
+        
+        try:
+            from sentence_transformers import SentenceTransformer
+            import numpy as np
+            
+            model = SentenceTransformer("all-MiniLM-L6-v2")
+            
+            # Embed atoms from both domains
+            texts_a = [f"{a.subject} {a.predicate} {a.object}" for a in atoms_a[:50]]
+            texts_b = [f"{a.subject} {a.predicate} {a.object}" for a in atoms_b[:50]]
+            
+            if not texts_a or not texts_b:
+                return []
+            
+            emb_a = model.encode(texts_a, convert_to_numpy=True)
+            emb_b = model.encode(texts_b, convert_to_numpy=True)
+            
+            # Compute cross-domain similarity matrix
+            # Normalize for cosine similarity
+            emb_a = emb_a / (np.linalg.norm(emb_a, axis=1, keepdims=True) + 1e-8)
+            emb_b = emb_b / (np.linalg.norm(emb_b, axis=1, keepdims=True) + 1e-8)
+            sim_matrix = emb_a @ emb_b.T
+            
+            # Find top-k bridges (high semantic similarity, different domains)
+            flat_indices = np.argsort(sim_matrix.ravel())[::-1][:top_k * 2]
+            
+            seen = set()
+            for flat_idx in flat_indices:
+                i = int(flat_idx // sim_matrix.shape[1])
+                j = int(flat_idx % sim_matrix.shape[1])
+                sim = float(sim_matrix[i, j])
+                
+                if sim < 0.3:
+                    break
+                
+                # Skip if lexically too similar (we want non-obvious bridges)
+                words_a = set(texts_a[i].lower().split())
+                words_b = set(texts_b[j].lower().split())
+                lexical_overlap = len(words_a & words_b) / max(len(words_a | words_b), 1)
+                
+                if lexical_overlap > 0.5:
+                    continue
+                
+                key = (i, j)
+                if key not in seen:
+                    seen.add(key)
+                    bridges.append({
+                        "a": texts_a[i][:80],
+                        "b": texts_b[j][:80],
+                        "sim": round(sim, 3),
+                        "domains": [domain_a, domain_b],
+                    })
+                
+                if len(bridges) >= top_k:
+                    break
+            
+            logger.info(f"Found {len(bridges)} semantic bridges between {domain_a} and {domain_b}")
+            
+        except ImportError:
+            # Fallback: keyword overlap scoring
+            for a in atoms_a[:30]:
+                a_words = set(f"{a.subject} {a.predicate} {a.object}".lower().split())
+                for b in atoms_b[:30]:
+                    b_words = set(f"{b.subject} {b.predicate} {b.object}".lower().split())
+                    overlap = a_words & b_words
+                    if 2 <= len(overlap) <= 4:  # Some overlap but not identical
+                        bridges.append({
+                            "a": f"{a.subject} {a.predicate} {a.object}"[:80],
+                            "b": f"{b.subject} {b.predicate} {b.object}"[:80],
+                            "sim": round(len(overlap) / max(len(a_words | b_words), 1), 3),
+                            "domains": [domain_a, domain_b],
+                        })
+                    if len(bridges) >= top_k:
+                        break
+                if len(bridges) >= top_k:
+                    break
+        
+        return bridges
+
     async def get_patterns_for_domain(self, domain: str) -> List[Dict[str, Any]]:
         """Get all meta-patterns relevant to a specific domain"""
         relevant = [

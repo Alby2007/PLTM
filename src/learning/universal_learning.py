@@ -18,6 +18,7 @@ from enum import Enum
 import re
 import hashlib
 import json
+import os
 from urllib.parse import urlparse
 
 from src.storage.sqlite_store import SQLiteGraphStore
@@ -88,7 +89,11 @@ class UniversalLearningSystem:
         self.store = store
         self.conflict_detector = ConflictDetector(store)
         
-        # Extraction patterns for different content types
+        # LLM-powered extraction (primary when API key available)
+        self._llm_extractor = None
+        self._llm_enabled = bool(os.getenv("ANTHROPIC_API_KEY", ""))
+        
+        # Extraction patterns for different content types (regex fallback)
         self.fact_patterns = [
             r"(.+?) is (?:a|an|the) (.+)",
             r"(.+?) (?:was|were) (?:founded|created|established) (?:in|on) (.+)",
@@ -134,10 +139,13 @@ class UniversalLearningSystem:
         if source_type is None:
             source_type = self._detect_source_type(url, content)
         
-        # Extract knowledge based on source type
-        facts = await self._extract_facts(content, url, source_type)
-        concepts = await self._extract_concepts(content, url)
-        relationships = await self._extract_relationships(content)
+        # Extract knowledge - LLM primary, regex fallback
+        if self._llm_enabled:
+            facts, concepts, relationships = await self._extract_with_llm(content, source_type.value if source_type else "general")
+        else:
+            facts = await self._extract_facts(content, url, source_type)
+            concepts = await self._extract_concepts(content, url)
+            relationships = await self._extract_relationships(content)
         
         # Determine domain
         domain = self._classify_domain(content)
@@ -217,10 +225,13 @@ class UniversalLearningSystem:
         """
         logger.info(f"Learning from paper: {paper_id} - {title}")
         
-        # Extract research-specific knowledge
-        findings = await self._extract_research_findings(abstract, content)
-        methods = await self._extract_methodologies(content)
-        results = await self._extract_experimental_results(content)
+        # Extract research-specific knowledge - LLM primary, regex fallback
+        if self._llm_enabled:
+            findings, methods, results = await self._extract_paper_with_llm(title, abstract, content)
+        else:
+            findings = await self._extract_research_findings(abstract, content)
+            methods = await self._extract_methodologies(content)
+            results = await self._extract_experimental_results(content)
         
         # Store paper metadata
         paper_atom = MemoryAtom(
@@ -379,6 +390,99 @@ class UniversalLearningSystem:
             "apis": len(apis),
             "sample": patterns[:2] if patterns else []
         }
+    
+    def _get_llm_extractor(self):
+        """Lazy-load LLM extractor"""
+        if self._llm_extractor is None:
+            from src.learning.llm_extractor import LLMKnowledgeExtractor
+            self._llm_extractor = LLMKnowledgeExtractor()
+        return self._llm_extractor
+    
+    async def _extract_with_llm(
+        self, content: str, source_type: str
+    ) -> tuple:
+        """
+        LLM-powered extraction returning (facts, concepts, relationships)
+        in the same format as the regex methods.
+        Falls back to empty lists on failure.
+        """
+        extractor = self._get_llm_extractor()
+        triples = await extractor.extract_from_text(content, source_type)
+        
+        if not triples:
+            return [], [], []
+        
+        facts = []
+        concepts = []
+        relationships = []
+        
+        for t in triples:
+            fact = ExtractedFact(
+                subject=t.subject,
+                predicate=t.predicate,
+                object=t.object,
+                confidence=t.confidence,
+                source="llm_extraction",
+                domain=t.domain,
+            )
+            facts.append(fact)
+            
+            # Also create concepts from subjects
+            concepts.append(ExtractedConcept(
+                name=t.subject,
+                definition=f"{t.subject} {t.predicate} {t.object}",
+                domain=t.domain,
+                related_concepts=[t.object[:50]],
+            ))
+        
+        logger.info(f"LLM extracted {len(facts)} facts from {source_type} content")
+        return facts, concepts, relationships
+    
+    async def _extract_paper_with_llm(
+        self, title: str, abstract: str, content: str
+    ) -> tuple:
+        """
+        LLM-powered paper extraction returning (findings, methods, results)
+        in the same format as the regex methods.
+        """
+        extractor = self._get_llm_extractor()
+        pk = await extractor.extract_from_paper(title, abstract, content)
+        
+        findings = []
+        for f in pk.findings:
+            findings.append(ExtractedFact(
+                subject=f.get("topic", title[:50]),
+                predicate="found_that",
+                object=f.get("result", ""),
+                confidence=f.get("confidence", 0.7),
+                source="llm_paper_extraction",
+                domain="research",
+            ))
+        
+        methods = []
+        for m in pk.methods:
+            methods.append(ExtractedFact(
+                subject=title[:50],
+                predicate="uses_method",
+                object=m.get("name", ""),
+                confidence=0.9,
+                source="llm_paper_extraction",
+                domain="research",
+            ))
+        
+        results = []
+        for r in pk.relationships:
+            results.append(ExtractedFact(
+                subject=r.get("subject", ""),
+                predicate=r.get("predicate", "related_to"),
+                object=r.get("object", ""),
+                confidence=r.get("confidence", 0.6),
+                source="llm_paper_extraction",
+                domain="research",
+            ))
+        
+        logger.info(f"LLM extracted {len(findings)} findings, {len(methods)} methods from paper")
+        return findings, methods, results
     
     def _detect_source_type(self, url: str, content: str) -> SourceType:
         """Auto-detect source type from URL and content"""

@@ -489,20 +489,37 @@ class AttentionMemoryRetrieval:
     
     def _text_to_embedding(self, text: str, dim: int = 64) -> np.ndarray:
         """
-        Simple bag-of-words embedding.
+        Generate text embedding.
         
-        Uses hash-based feature extraction for speed.
-        In production, would use sentence-transformers.
+        Uses sentence-transformers (384-dim) when available for real
+        semantic similarity. Falls back to hash-based bag-of-words (64-dim).
         """
+        # Try real embeddings first
+        if not hasattr(self, '_st_model'):
+            try:
+                from sentence_transformers import SentenceTransformer
+                self._st_model = SentenceTransformer("all-MiniLM-L6-v2")
+                self._use_st = True
+                logger.info("AttentionRetrieval: using sentence-transformers for embeddings")
+            except ImportError:
+                self._st_model = None
+                self._use_st = False
+        
+        if self._use_st and self._st_model is not None:
+            emb = self._st_model.encode(text, convert_to_numpy=True)
+            norm = np.linalg.norm(emb)
+            if norm > 0:
+                emb = emb / norm
+            return emb
+        
+        # Fallback: hash-based bag-of-words
         words = text.lower().split()
         embedding = np.zeros(dim)
         
         for word in words:
-            # Hash word to get feature index
             h = hash(word) % dim
             embedding[h] += 1.0
         
-        # Normalize
         norm = np.linalg.norm(embedding)
         if norm > 0:
             embedding = embedding / norm

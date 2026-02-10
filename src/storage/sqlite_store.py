@@ -612,8 +612,14 @@ class SQLiteGraphStore:
         from src.core.models import JuryDecision
         jury_history = [JuryDecision(**jd) for jd in metadata.get("jury_history", [])]
 
+        # Handle malformed UUIDs (some atoms have truncated hex IDs)
+        try:
+            atom_id = UUID(row["id"])
+        except ValueError:
+            atom_id = UUID(row["id"].ljust(32, '0')[:32].replace('-', '')[:32])
+
         return MemoryAtom(
-            id=UUID(row["id"]),
+            id=atom_id,
             atom_type=row["atom_type"],
             graph=row["graph"],
             subject=row["subject"],
@@ -622,7 +628,7 @@ class SQLiteGraphStore:
             object_metadata=metadata.get("object_metadata"),
             contexts=metadata.get("contexts", []),
             temporal_validity=metadata.get("temporal_validity"),
-            provenance=Provenance(metadata["provenance"]),
+            provenance=Provenance(metadata.get("provenance", "inferred")),
             assertion_count=metadata.get("assertion_count", 1),
             explicit_confirms=explicit_confirms,
             first_observed=datetime.fromtimestamp(row["first_observed"]),
@@ -801,7 +807,13 @@ class SQLiteGraphStore:
         )
         rows = await cursor.fetchall()
         
-        return [self._row_to_atom(row) for row in rows]
+        atoms = []
+        for row in rows:
+            try:
+                atoms.append(self._row_to_atom(row))
+            except Exception:
+                continue  # Skip corrupt atoms (bad UUIDs, missing metadata, invalid types)
+        return atoms
     
     # Alias for MCP server compatibility
     async def add_atom(self, atom: MemoryAtom) -> None:

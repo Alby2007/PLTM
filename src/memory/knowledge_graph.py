@@ -61,8 +61,91 @@ class KnowledgeNetworkGraph:
         self.nodes: Dict[str, KnowledgeNode] = {}
         self.edges: List[KnowledgeEdge] = []
         self.adjacency: Dict[str, Set[str]] = defaultdict(set)
+        self._db_initialized = False
         
         logger.info("KnowledgeNetworkGraph initialized - network effects enabled")
+    
+    async def _ensure_db(self) -> None:
+        """Create persistence tables and load existing graph from SQLite"""
+        if self._db_initialized:
+            return
+        
+        if not self.store._conn:
+            return
+        
+        await self.store._conn.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge_nodes (
+                node_id TEXT PRIMARY KEY,
+                concept TEXT NOT NULL,
+                domain TEXT NOT NULL,
+                connections INTEGER DEFAULT 0,
+                value_score REAL DEFAULT 0.0,
+                created_at TEXT NOT NULL
+            )
+        """)
+        
+        await self.store._conn.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge_edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_node TEXT NOT NULL,
+                to_node TEXT NOT NULL,
+                relationship TEXT NOT NULL,
+                strength REAL DEFAULT 0.5,
+                bidirectional INTEGER DEFAULT 0,
+                UNIQUE(from_node, to_node, relationship)
+            )
+        """)
+        
+        await self.store._conn.commit()
+        
+        # Load existing graph
+        cursor = await self.store._conn.execute("SELECT node_id, concept, domain, connections, value_score, created_at FROM knowledge_nodes")
+        rows = await cursor.fetchall()
+        for r in rows:
+            self.nodes[r[0]] = KnowledgeNode(
+                node_id=r[0], concept=r[1], domain=r[2],
+                connections=r[3], value_score=r[4],
+                created_at=datetime.fromisoformat(r[5]) if r[5] else datetime.now()
+            )
+        
+        cursor = await self.store._conn.execute("SELECT from_node, to_node, relationship, strength, bidirectional FROM knowledge_edges")
+        rows = await cursor.fetchall()
+        for r in rows:
+            self.edges.append(KnowledgeEdge(
+                from_node=r[0], to_node=r[1], relationship=r[2],
+                strength=r[3], bidirectional=bool(r[4])
+            ))
+            self.adjacency[r[0]].add(r[1])
+            if r[4]:  # bidirectional
+                self.adjacency[r[1]].add(r[0])
+        
+        self._db_initialized = True
+        if self.nodes:
+            logger.info(f"Loaded knowledge graph: {len(self.nodes)} nodes, {len(self.edges)} edges")
+    
+    async def _persist_node(self, node: KnowledgeNode) -> None:
+        """Save a node to SQLite"""
+        if not self.store._conn:
+            return
+        await self.store._conn.execute(
+            """INSERT OR REPLACE INTO knowledge_nodes
+            (node_id, concept, domain, connections, value_score, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)""",
+            (node.node_id, node.concept, node.domain, node.connections,
+             node.value_score, node.created_at.isoformat())
+        )
+    
+    async def _persist_edge(self, edge: KnowledgeEdge) -> None:
+        """Save an edge to SQLite"""
+        if not self.store._conn:
+            return
+        await self.store._conn.execute(
+            """INSERT OR IGNORE INTO knowledge_edges
+            (from_node, to_node, relationship, strength, bidirectional)
+            VALUES (?, ?, ?, ?, ?)""",
+            (edge.from_node, edge.to_node, edge.relationship,
+             edge.strength, int(edge.bidirectional))
+        )
     
     async def add_concept(
         self,
@@ -74,7 +157,9 @@ class KnowledgeNetworkGraph:
         Add a concept to the knowledge graph.
         
         Automatically creates edges to related concepts.
+        Persists to SQLite.
         """
+        await self._ensure_db()
         node_id = self._concept_to_id(concept)
         
         if node_id not in self.nodes:
@@ -117,6 +202,18 @@ class KnowledgeNetworkGraph:
         
         # Recalculate value scores
         self._update_value_scores()
+        
+        # Persist changes
+        await self._persist_node(self.nodes[node_id])
+        if related_concepts:
+            for related in related_concepts:
+                rid = self._concept_to_id(related)
+                if rid in self.nodes:
+                    await self._persist_node(self.nodes[rid])
+            for edge in self.edges[-edges_created:] if edges_created else []:
+                await self._persist_edge(edge)
+        if self.store._conn:
+            await self.store._conn.commit()
         
         return {"id": node_id, "edges": edges_created, "conn": self.nodes[node_id].connections}
     
