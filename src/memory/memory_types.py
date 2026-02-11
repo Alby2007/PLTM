@@ -143,10 +143,11 @@ class TypedMemoryStore:
     Optionally integrates with EmbeddingStore for semantic search.
     """
     
-    def __init__(self, db_path: str, embedding_store=None):
+    def __init__(self, db_path: str, embedding_store=None, jury=None):
         self.db_path = db_path
         self._conn: Optional[aiosqlite.Connection] = None
         self.embeddings = embedding_store  # Optional EmbeddingStore
+        self.jury = jury  # Optional MemoryJury validation gate
     
     async def connect(self):
         """Connect and create schema."""
@@ -233,8 +234,8 @@ class TypedMemoryStore:
     
     # ========== STORE ==========
     
-    async def store(self, mem: TypedMemory) -> str:
-        """Store a typed memory."""
+    async def store(self, mem: TypedMemory, bypass_jury: bool = False) -> str:
+        """Store a typed memory. Runs jury validation unless bypass_jury=True."""
         now = time.time()
         if mem.created_at == 0:
             mem.created_at = now
@@ -242,6 +243,36 @@ class TypedMemoryStore:
             mem.last_accessed = now
         if not mem.id:
             mem.id = str(uuid4())
+        
+        # Jury validation gate
+        if self.jury and not bypass_jury:
+            from src.memory.memory_jury import Verdict
+            # Gather existing contents for dedup check
+            existing = []
+            try:
+                cursor = await self._conn.execute(
+                    "SELECT content FROM typed_memories WHERE user_id = ? AND memory_type = ? LIMIT 50",
+                    (mem.user_id, mem.memory_type.value)
+                )
+                rows = await cursor.fetchall()
+                existing = [r[0] for r in rows]
+            except Exception:
+                pass
+            
+            decision = self.jury.deliberate(
+                content=mem.content,
+                memory_type=mem.memory_type.value,
+                episode_timestamp=mem.episode_timestamp,
+                existing_contents=existing,
+            )
+            
+            if decision.verdict == Verdict.REJECT:
+                logger.warning(f"Jury REJECTED memory: {decision.explanation} — content: {mem.content[:80]}")
+                return ""  # Empty ID signals rejection
+            elif decision.verdict == Verdict.QUARANTINE:
+                logger.info(f"Jury QUARANTINED memory: {decision.explanation} — reducing strength")
+                mem.strength = max(0.1, mem.strength * 0.5)  # Store with reduced strength
+                mem.context = (mem.context + f" [QUARANTINED: {decision.explanation}]").strip()
         
         await self._conn.execute("""
             INSERT OR REPLACE INTO typed_memories

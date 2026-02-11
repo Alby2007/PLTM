@@ -70,15 +70,17 @@ async def initialize_pltm(custom_db_path: str = None):
     conflict_resolver = EnhancedConflictResolver(store)
     contextual_personality = ContextualPersonality(store)
     
-    # Initialize embedding store + typed memory store (uses same DB)
+    # Initialize embedding store + jury + typed memory store (uses same DB)
     from src.memory.memory_types import TypedMemoryStore
     from src.memory.embedding_store import EmbeddingStore
+    from src.memory.memory_jury import MemoryJury
     embedding_store = EmbeddingStore(str(db_path))
     await embedding_store.connect()
-    typed_memory_store = TypedMemoryStore(str(db_path), embedding_store=embedding_store)
+    memory_jury = MemoryJury(enable_meta_judge=True)
+    typed_memory_store = TypedMemoryStore(str(db_path), embedding_store=embedding_store, jury=memory_jury)
     await typed_memory_store.connect()
     
-    logger.info("PLTM MCP Server initialized (with embeddings)")
+    logger.info("PLTM MCP Server initialized (with embeddings + jury)")
 
 
 # Create MCP server
@@ -1375,6 +1377,19 @@ async def list_tools() -> List[Tool]:
             }
         ),
         
+        Tool(
+            name="jury_stats",
+            description="Get Judge/Jury system statistics. Shows per-judge accuracy, confidence, latency, conflict detection rates, and recent deliberation history. The jury validates every memory before storage (Safety + Quality + Temporal + Consensus), with MetaJudge tracking judge performance.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "include_history": {"type": "boolean", "description": "Include recent deliberation history (default true)"},
+                    "history_limit": {"type": "integer", "description": "Number of recent history entries (default 20)"},
+                },
+                "required": []
+            }
+        ),
+        
         # === EXPERIMENT / RESEARCH TOOLS ===
         Tool(
             name="trace_claim_reasoning",
@@ -1922,6 +1937,8 @@ async def _dispatch_tool(name: str, arguments: Dict[str, Any]) -> List[TextConte
         return await handle_generate_memory_prompt(arguments)
     elif name == "belief_auto_check":
         return await handle_belief_auto_check(arguments)
+    elif name == "jury_stats":
+        return await handle_jury_stats(arguments)
     # Experiments
     elif name == "trace_claim_reasoning":
         return await handle_trace_claim_reasoning(arguments)
@@ -4086,6 +4103,22 @@ async def handle_belief_auto_check(args: Dict[str, Any]) -> List[TextContent]:
         "changes": changed,
         "stable": [r for r in report if not r["changed"]],
     }))]
+
+
+async def handle_jury_stats(args: Dict[str, Any]) -> List[TextContent]:
+    """Get Judge/Jury system statistics and MetaJudge report."""
+    if not typed_memory_store or not typed_memory_store.jury:
+        return [TextContent(type="text", text=compact_json({"error": "Jury not initialized"}))]
+    
+    stats = typed_memory_store.jury.get_stats()
+    include_history = args.get("include_history", True)
+    if not include_history:
+        stats.pop("recent_history", None)
+    elif "recent_history" in stats:
+        limit = args.get("history_limit", 20)
+        stats["recent_history"] = stats["recent_history"][-limit:]
+    
+    return [TextContent(type="text", text=compact_json(stats))]
 
 
 # === EXPERIMENT / RESEARCH HANDLERS ===
