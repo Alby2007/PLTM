@@ -21,7 +21,15 @@ from uuid import uuid4
 from loguru import logger
 
 
+from src.db_config import get_db_path as _get_db_path
+
+# Keep module-level DB_PATH for backward compat, but prefer get_db_path()
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "pltm_mcp.db"
+
+
+def _db():
+    """Get current DB path (respects centralized override)."""
+    return _get_db_path()
 
 # Domains that require mandatory verification
 HIGH_RISK_DOMAINS = [
@@ -58,7 +66,7 @@ HEDGE_PHRASES = [
 
 def _ensure_tables():
     """Create epistemic monitoring tables."""
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(_db()))
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS prediction_book (
             id TEXT PRIMARY KEY,
@@ -122,7 +130,7 @@ class EpistemicMonitor:
 
         Returns whether to proceed, adjusted confidence, and required actions.
         """
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(_db()))
 
         # Get historical calibration for this domain
         cal = conn.execute(
@@ -243,7 +251,7 @@ class EpistemicMonitor:
         so we can track calibration over time.
         """
         claim_id = str(uuid4())
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(_db()))
         conn.execute(
             """INSERT INTO prediction_book
                (id, timestamp, claim, domain, felt_confidence, epistemic_status,
@@ -275,7 +283,7 @@ class EpistemicMonitor:
 
         Can find by claim_id or by searching claim_text.
         """
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(_db()))
 
         if claim_id:
             row = conn.execute(
@@ -338,7 +346,7 @@ class EpistemicMonitor:
         Get calibration curves and accuracy stats.
         Shows: "When you feel X% confident, you're actually Y% accurate"
         """
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(_db()))
 
         if domain:
             domains = [domain]
@@ -443,7 +451,7 @@ class EpistemicMonitor:
 
     def get_unresolved_claims(self, domain: str = "", limit: int = 20) -> Dict:
         """Get claims that haven't been verified yet — the prediction book backlog."""
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(_db()))
 
         if domain:
             rows = conn.execute(

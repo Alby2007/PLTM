@@ -17,8 +17,10 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Set, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict
+import json
 import math
 
+import aiosqlite
 from src.storage.sqlite_store import SQLiteGraphStore
 from src.core.models import MemoryAtom, AtomType, Provenance, GraphType
 from loguru import logger
@@ -58,6 +60,7 @@ class KnowledgeNetworkGraph:
     
     def __init__(self, store: SQLiteGraphStore):
         self.store = store
+        self._conn = None  # Own dedicated connection
         self.nodes: Dict[str, KnowledgeNode] = {}
         self.edges: List[KnowledgeEdge] = []
         self.adjacency: Dict[str, Set[str]] = defaultdict(set)
@@ -66,14 +69,27 @@ class KnowledgeNetworkGraph:
         logger.info("KnowledgeNetworkGraph initialized - network effects enabled")
     
     async def _ensure_db(self) -> None:
-        """Create persistence tables and load existing graph from SQLite"""
+        """Create persistence tables and load existing graph from SQLite."""
         if self._db_initialized:
             return
         
-        if not self.store._conn:
+        # Open our own dedicated connection to avoid WAL lock contention
+        # with the main store connection
+        db_path = str(self.store.db_path)
+        if not db_path:
+            logger.warning("KnowledgeNetworkGraph: no db_path, running in-memory only")
+            self._db_initialized = True
             return
         
-        await self.store._conn.execute("""
+        try:
+            self._conn = await aiosqlite.connect(db_path)
+            conn = self._conn
+        except Exception as e:
+            logger.error(f"KnowledgeNetworkGraph: failed to open DB: {e}")
+            self._db_initialized = True
+            return
+        
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS knowledge_nodes (
                 node_id TEXT PRIMARY KEY,
                 concept TEXT NOT NULL,
@@ -83,8 +99,7 @@ class KnowledgeNetworkGraph:
                 created_at TEXT NOT NULL
             )
         """)
-        
-        await self.store._conn.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS knowledge_edges (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 from_node TEXT NOT NULL,
@@ -95,54 +110,61 @@ class KnowledgeNetworkGraph:
                 UNIQUE(from_node, to_node, relationship)
             )
         """)
+        await conn.commit()
         
-        await self.store._conn.commit()
-        
-        # Load existing graph
-        cursor = await self.store._conn.execute("SELECT node_id, concept, domain, connections, value_score, created_at FROM knowledge_nodes")
+        # Load existing graph into memory
+        cursor = await conn.execute("SELECT node_id, concept, domain, connections, value_score, created_at FROM knowledge_nodes")
         rows = await cursor.fetchall()
-        for r in rows:
-            self.nodes[r[0]] = KnowledgeNode(
-                node_id=r[0], concept=r[1], domain=r[2],
-                connections=r[3], value_score=r[4],
-                created_at=datetime.fromisoformat(r[5]) if r[5] else datetime.now()
+        for row in rows:
+            node = KnowledgeNode(
+                node_id=row[0],
+                concept=row[1],
+                domain=row[2],
+                connections=row[3],
+                value_score=row[4],
+                created_at=datetime.fromisoformat(row[5]) if row[5] else datetime.now()
             )
+            self.nodes[node.node_id] = node
         
-        cursor = await self.store._conn.execute("SELECT from_node, to_node, relationship, strength, bidirectional FROM knowledge_edges")
+        cursor = await conn.execute("SELECT from_node, to_node, relationship, strength, bidirectional FROM knowledge_edges")
         rows = await cursor.fetchall()
-        for r in rows:
-            self.edges.append(KnowledgeEdge(
-                from_node=r[0], to_node=r[1], relationship=r[2],
-                strength=r[3], bidirectional=bool(r[4])
-            ))
-            self.adjacency[r[0]].add(r[1])
-            if r[4]:  # bidirectional
-                self.adjacency[r[1]].add(r[0])
+        for row in rows:
+            edge = KnowledgeEdge(
+                from_node=row[0],
+                to_node=row[1],
+                relationship=row[2],
+                strength=row[3],
+                bidirectional=bool(row[4])
+            )
+            self.edges.append(edge)
+            self.adjacency[edge.from_node].add(edge.to_node)
+            if edge.bidirectional:
+                self.adjacency[edge.to_node].add(edge.from_node)
         
         self._db_initialized = True
-        if self.nodes:
-            logger.info(f"Loaded knowledge graph: {len(self.nodes)} nodes, {len(self.edges)} edges")
+        logger.info(f"KnowledgeNetworkGraph loaded from DB: {len(self.nodes)} nodes, {len(self.edges)} edges")
     
     async def _persist_node(self, node: KnowledgeNode) -> None:
-        """Save a node to SQLite"""
-        if not self.store._conn:
+        """Upsert a single node to SQLite."""
+        if self._conn is None:
             return
-        await self.store._conn.execute(
+        await self._conn.execute(
             """INSERT OR REPLACE INTO knowledge_nodes
-            (node_id, concept, domain, connections, value_score, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)""",
-            (node.node_id, node.concept, node.domain, node.connections,
-             node.value_score, node.created_at.isoformat())
+               (node_id, concept, domain, connections, value_score, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (node.node_id, node.concept, node.domain,
+             node.connections, node.value_score,
+             node.created_at.isoformat())
         )
     
     async def _persist_edge(self, edge: KnowledgeEdge) -> None:
-        """Save an edge to SQLite"""
-        if not self.store._conn:
+        """Insert an edge to SQLite (ignore duplicates)."""
+        if self._conn is None:
             return
-        await self.store._conn.execute(
+        await self._conn.execute(
             """INSERT OR IGNORE INTO knowledge_edges
-            (from_node, to_node, relationship, strength, bidirectional)
-            VALUES (?, ?, ?, ?, ?)""",
+               (from_node, to_node, relationship, strength, bidirectional)
+               VALUES (?, ?, ?, ?, ?)""",
             (edge.from_node, edge.to_node, edge.relationship,
              edge.strength, int(edge.bidirectional))
         )
@@ -157,9 +179,10 @@ class KnowledgeNetworkGraph:
         Add a concept to the knowledge graph.
         
         Automatically creates edges to related concepts.
-        Persists to SQLite.
+        Persists to SQLite on every call.
         """
         await self._ensure_db()
+        
         node_id = self._concept_to_id(concept)
         
         if node_id not in self.nodes:
@@ -170,6 +193,8 @@ class KnowledgeNetworkGraph:
             )
         
         edges_created = 0
+        new_edges: List[KnowledgeEdge] = []
+        modified_nodes: List[KnowledgeNode] = [self.nodes[node_id]]
         
         if related_concepts:
             for related in related_concepts:
@@ -185,13 +210,15 @@ class KnowledgeNetworkGraph:
                 
                 # Create edge
                 if related_id not in self.adjacency[node_id]:
-                    self.edges.append(KnowledgeEdge(
+                    edge = KnowledgeEdge(
                         from_node=node_id,
                         to_node=related_id,
                         relationship="related_to",
                         strength=0.5,
                         bidirectional=True
-                    ))
+                    )
+                    self.edges.append(edge)
+                    new_edges.append(edge)
                     self.adjacency[node_id].add(related_id)
                     self.adjacency[related_id].add(node_id)
                     edges_created += 1
@@ -199,21 +226,18 @@ class KnowledgeNetworkGraph:
                     # Update connection counts
                     self.nodes[node_id].connections += 1
                     self.nodes[related_id].connections += 1
+                    modified_nodes.append(self.nodes[related_id])
         
         # Recalculate value scores
         self._update_value_scores()
         
-        # Persist changes
-        await self._persist_node(self.nodes[node_id])
-        if related_concepts:
-            for related in related_concepts:
-                rid = self._concept_to_id(related)
-                if rid in self.nodes:
-                    await self._persist_node(self.nodes[rid])
-            for edge in self.edges[-edges_created:] if edges_created else []:
-                await self._persist_edge(edge)
-        if self.store._conn:
-            await self.store._conn.commit()
+        # Persist to SQLite
+        for node in modified_nodes:
+            await self._persist_node(node)
+        for edge in new_edges:
+            await self._persist_edge(edge)
+        if self._conn:
+            await self._conn.commit()
         
         return {"id": node_id, "edges": edges_created, "conn": self.nodes[node_id].connections}
     
@@ -244,6 +268,10 @@ class KnowledgeNetworkGraph:
             # Combined score
             node.value_score = connection_value * (1 + centrality)
     
+    async def _ensure_loaded(self) -> None:
+        """Convenience: ensure DB tables exist and graph is loaded."""
+        await self._ensure_db()
+    
     async def find_path(
         self,
         from_concept: str,
@@ -256,6 +284,7 @@ class KnowledgeNetworkGraph:
         Bidirectional search is O(b^(d/2)) vs O(b^d) for standard BFS.
         Much faster for sparse graphs.
         """
+        await self._ensure_loaded()
         from_id = self._concept_to_id(from_concept)
         to_id = self._concept_to_id(to_concept)
         
@@ -311,6 +340,7 @@ class KnowledgeNetworkGraph:
         
         These are the "hub" concepts that connect many others.
         """
+        await self._ensure_loaded()
         sorted_nodes = sorted(
             self.nodes.values(),
             key=lambda n: n.value_score,
@@ -329,6 +359,7 @@ class KnowledgeNetworkGraph:
         
         Returns all concepts within N hops.
         """
+        await self._ensure_loaded()
         node_id = self._concept_to_id(concept)
         
         if node_id not in self.nodes:
@@ -358,6 +389,7 @@ class KnowledgeNetworkGraph:
         
         These are the most valuable for cross-domain insights.
         """
+        await self._ensure_loaded()
         bridges = []
         
         for node_id, node in self.nodes.items():
@@ -386,6 +418,7 @@ class KnowledgeNetworkGraph:
         
         Higher PageRank = more important concept in the network.
         """
+        await self._ensure_loaded()
         if not self.nodes:
             return {"nodes": 0}
         
@@ -428,6 +461,7 @@ class KnowledgeNetworkGraph:
         - Same domain
         - Similar connection patterns
         """
+        await self._ensure_loaded()
         node_id = self._concept_to_id(concept)
         
         if node_id not in self.nodes:
@@ -471,6 +505,7 @@ class KnowledgeNetworkGraph:
     
     async def get_network_stats(self) -> Dict[str, Any]:
         """Get overall network statistics"""
+        await self._ensure_loaded()
         if not self.nodes:
             return {"nodes": 0, "edges": 0}
         

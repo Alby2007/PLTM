@@ -7,7 +7,6 @@ Provides tools for personality tracking, mood detection, and memory management.
 
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -22,73 +21,64 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from mcp.server import Server
 from mcp.types import Tool, TextContent
-from loguru import logger
 
-# --- Heavy legacy imports (require pydantic, torch, outlines, etc.) ---
-# These are optional — if missing, legacy personality/pipeline tools won't work
-# but all 148 analysis tools (epistemic, self-model, ingestion, etc.) still function.
-_LEGACY_AVAILABLE = False
-try:
-    from src.storage.sqlite_store import SQLiteGraphStore
-    from src.pipeline.memory_pipeline import MemoryPipeline
-    from src.personality.personality_mood_agent import PersonalityMoodAgent
-    from src.personality.personality_synthesizer import PersonalitySynthesizer
-    from src.personality.mood_tracker import MoodTracker
-    from src.personality.mood_patterns import MoodPatterns
-    from src.personality.enhanced_conflict_resolver import EnhancedConflictResolver
-    from src.personality.contextual_personality import ContextualPersonality
-    from src.core.models import MemoryAtom, AtomType, Provenance, GraphType
-    _LEGACY_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"Legacy modules unavailable (missing deps: {e}). "
-                   "Analysis tools still work. Install full deps with: pip install -r requirements.txt")
-    SQLiteGraphStore = None
-    MemoryPipeline = None
-    PersonalityMoodAgent = None
-    PersonalitySynthesizer = None
-    MoodTracker = None
-    MoodPatterns = None
-    EnhancedConflictResolver = None
-    ContextualPersonality = None
+from src.storage.sqlite_store import SQLiteGraphStore
+from src.pipeline.memory_pipeline import MemoryPipeline
+from src.personality.personality_mood_agent import PersonalityMoodAgent
+from src.personality.personality_synthesizer import PersonalitySynthesizer
+from src.personality.mood_tracker import MoodTracker
+from src.personality.mood_patterns import MoodPatterns
+from src.personality.enhanced_conflict_resolver import EnhancedConflictResolver
+from src.personality.contextual_personality import ContextualPersonality
+from src.core.models import MemoryAtom, AtomType, Provenance, GraphType
+from loguru import logger
 
 
 # Initialize PLTM system
-store: Optional[Any] = None
-pipeline: Optional[Any] = None
-personality_agent: Optional[Any] = None
-personality_synth: Optional[Any] = None
-mood_tracker: Optional[Any] = None
-mood_patterns: Optional[Any] = None
-conflict_resolver: Optional[Any] = None
-contextual_personality: Optional[Any] = None
+store: Optional[SQLiteGraphStore] = None
+pipeline: Optional[MemoryPipeline] = None
+personality_agent: Optional[PersonalityMoodAgent] = None
+personality_synth: Optional[PersonalitySynthesizer] = None
+mood_tracker: Optional[MoodTracker] = None
+mood_patterns: Optional[MoodPatterns] = None
+conflict_resolver: Optional[EnhancedConflictResolver] = None
+contextual_personality: Optional[ContextualPersonality] = None
+typed_memory_store = None  # TypedMemoryStore - initialized in initialize_pltm
+embedding_store = None  # EmbeddingStore - initialized in initialize_pltm
 
 
-async def initialize_pltm():
+async def initialize_pltm(custom_db_path: str = None):
     """Initialize PLTM system components"""
     global store, pipeline, personality_agent, personality_synth
     global mood_tracker, mood_patterns, conflict_resolver, contextual_personality
+    global typed_memory_store, embedding_store
     
     # Initialize storage (absolute path so it works regardless of cwd)
-    db_path = Path(__file__).parent.parent / "data" / "pltm_mcp.db"
+    db_path = Path(custom_db_path) if custom_db_path else Path(__file__).parent.parent / "data" / "pltm_mcp.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if _LEGACY_AVAILABLE:
-        store = SQLiteGraphStore(db_path)
-        await store.connect()
-        
-        # Initialize pipeline
-        pipeline = MemoryPipeline(store)
-        
-        # Initialize personality/mood components
-        personality_agent = PersonalityMoodAgent(pipeline)
-        personality_synth = PersonalitySynthesizer(store)
-        mood_tracker = MoodTracker(store)
-        mood_patterns = MoodPatterns(store)
-        conflict_resolver = EnhancedConflictResolver(store)
-        contextual_personality = ContextualPersonality(store)
-        logger.info("PLTM MCP Server initialized (full mode — all modules loaded)")
-    else:
-        logger.info("PLTM MCP Server initialized (lite mode — analysis tools only)")
+    store = SQLiteGraphStore(str(db_path))
+    await store.connect()
+    
+    # Initialize pipeline
+    pipeline = MemoryPipeline(store)
+    
+    # Initialize personality/mood components
+    personality_agent = PersonalityMoodAgent(pipeline)
+    personality_synth = PersonalitySynthesizer(store)
+    mood_tracker = MoodTracker(store)
+    mood_patterns = MoodPatterns(store)
+    conflict_resolver = EnhancedConflictResolver(store)
+    contextual_personality = ContextualPersonality(store)
+    
+    # Initialize embedding store + typed memory store (uses same DB)
+    from src.memory.memory_types import TypedMemoryStore
+    from src.memory.embedding_store import EmbeddingStore
+    embedding_store = EmbeddingStore(str(db_path))
+    await embedding_store.connect()
+    typed_memory_store = TypedMemoryStore(str(db_path), embedding_store=embedding_store)
+    await typed_memory_store.connect()
+    
+    logger.info("PLTM MCP Server initialized (with embeddings)")
 
 
 # Create MCP server
@@ -551,12 +541,12 @@ async def list_tools() -> List[Tool]:
         
         Tool(
             name="learn_from_url",
-            description="Learn from any URL content. Extracts facts, concepts, relationships. AGI path - continuous learning from web.",
+            description="Learn from URL content. IMPORTANT: You MUST provide the actual text content in the 'content' parameter — you cannot fetch URLs yourself. Ask the user to paste the content, or skip if content is unavailable.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "Source URL"},
-                    "content": {"type": "string", "description": "Text content from the URL"},
+                    "url": {"type": "string", "description": "Source URL (for reference/attribution)"},
+                    "content": {"type": "string", "description": "REQUIRED: The actual text content from the URL. You cannot fetch this yourself — the user must provide it."},
                     "source_type": {"type": "string", "description": "Optional: web_page, research_paper, code_repository, conversation, transcript"}
                 },
                 "required": ["url", "content"]
@@ -756,14 +746,14 @@ async def list_tools() -> List[Tool]:
         
         Tool(
             name="attention_retrieve",
-            description="Retrieve memories weighted by attention to query. IMPORTANT: Use 'domain' to filter by knowledge area (e.g. 'science', 'geopolitics', 'military', 'north_korea', 'cyber', 'economics'). Without domain, returns mixed results.",
+            description="Retrieve memories weighted by attention to query. Transformer-style retrieval.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "user_id": {"type": "string"},
-                    "query": {"type": "string", "description": "Search query"},
+                    "query": {"type": "string"},
                     "top_k": {"type": "integer", "default": 10},
-                    "domain": {"type": "string", "description": "Filter by domain: science, geopolitics, military, north_korea, cyber, economics, energy, etc. STRONGLY RECOMMENDED."}
+                    "domain": {"type": "string"}
                 },
                 "required": ["user_id", "query"]
             }
@@ -771,14 +761,13 @@ async def list_tools() -> List[Tool]:
         
         Tool(
             name="attention_multihead",
-            description="Multi-head attention retrieval - different scoring strategies. Use 'domain' to filter by knowledge area and avoid mixing geopolitical/scientific results.",
+            description="Multi-head attention retrieval - different aspects of query.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "user_id": {"type": "string"},
                     "query": {"type": "string"},
-                    "num_heads": {"type": "integer", "default": 4},
-                    "domain": {"type": "string", "description": "Filter by domain: science, geopolitics, military, north_korea, cyber, economics, energy, etc. STRONGLY RECOMMENDED."}
+                    "num_heads": {"type": "integer", "default": 4}
                 },
                 "required": ["user_id", "query"]
             }
@@ -1123,8 +1112,8 @@ async def list_tools() -> List[Tool]:
         
         # === ARXIV INGESTION (Real Provenance) ===
         Tool(
-            name="ingest_arxiv_paper",
-            description="Ingest a SINGLE arXiv paper by ID: fetch metadata, extract claims, store with REAL provenance (URL, authors, quoted spans). For batch search, use ingest_arxiv instead.",
+            name="ingest_arxiv",
+            description="Ingest an arXiv paper: fetch metadata, extract claims, store with REAL provenance (URL, authors, quoted spans).",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1160,865 +1149,18 @@ async def list_tools() -> List[Tool]:
             }
         ),
         
-        # === AGI BREAKTHROUGH ENGINE ===
-        Tool(
-            name="breakthrough_synthesize",
-            description="Run LLM-powered cross-domain synthesis. Claude reasons over knowledge subgraphs to find non-obvious connections. AGI discovery engine.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "domain_a": {"type": "string", "description": "First domain (e.g., 'physics')"},
-                    "domain_b": {"type": "string", "description": "Second domain (e.g., 'economics')"}
-                },
-                "required": []
-            }
-        ),
-        
-        Tool(
-            name="generate_hypotheses",
-            description="Generate novel testable hypotheses from accumulated knowledge using Claude. Optionally guided by open research questions.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "domains": {"type": "array", "items": {"type": "string"}, "description": "Domains to focus on"},
-                    "questions": {"type": "array", "items": {"type": "string"}, "description": "Open questions to address"}
-                },
-                "required": []
-            }
-        ),
-        
-        Tool(
-            name="evaluate_hypothesis",
-            description="Evaluate a hypothesis against accumulated evidence using Claude.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "hypothesis": {"type": "string", "description": "The hypothesis to evaluate"},
-                    "domains": {"type": "array", "items": {"type": "string"}, "description": "Domains to search for evidence"}
-                },
-                "required": ["hypothesis"]
-            }
-        ),
-        
-        Tool(
-            name="find_analogies",
-            description="Find structural analogies for a concept between two domains using Claude.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "concept": {"type": "string", "description": "Concept to find analogies for"},
-                    "source_domain": {"type": "string", "description": "Domain the concept is from"},
-                    "target_domain": {"type": "string", "description": "Domain to find analogies in"}
-                },
-                "required": ["concept", "source_domain", "target_domain"]
-            }
-        ),
-        
-        Tool(
-            name="bulk_store",
-            description="Store multiple knowledge atoms in one call. Pass an array of atoms. Use this after web search to store all extracted intelligence at once.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "atoms": {"type": "array", "items": {"type": "object"}, "description": "Array of atoms: [{subject, predicate, object, confidence, context:[domain_tags], user_id}]"}
-                },
-                "required": ["atoms"]
-            }
-        ),
-        
-        Tool(
-            name="deep_extract",
-            description="Extract and store structured knowledge. Mode 1: pass 'triples' array to store directly [{s,p,o,c,d}]. Mode 2: pass 'content' text to get extraction instructions.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "content": {"type": "string", "description": "Text content to extract knowledge from"},
-                    "source_type": {"type": "string", "description": "Type: general, research_paper, code, news (default: general)"},
-                    "triples": {"type": "array", "items": {"type": "object"}, "description": "Pre-extracted triples [{s:'subject',p:'predicate',o:'object',c:0.7,d:'domain'}]"}
-                },
-                "required": []
-            }
-        ),
-        
-        # === RESEARCH AGENDA ===
-        Tool(
-            name="add_research_question",
-            description="Add an open research question to the agenda. The system will evaluate incoming knowledge against it.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "question": {"type": "string", "description": "The research question"},
-                    "domains": {"type": "array", "items": {"type": "string"}, "description": "Relevant domains"},
-                    "priority": {"type": "number", "description": "Priority 0-1 (default 0.5)"}
-                },
-                "required": ["question"]
-            }
-        ),
-        
-        Tool(
-            name="get_research_agenda",
-            description="Get active research questions with their status and evidence counts.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "description": "Max questions to return (default 10)"}
-                },
-                "required": []
-            }
-        ),
-        
-        Tool(
-            name="evaluate_agenda",
-            description="Check if recent knowledge answers any open research questions. Uses FTS matching (no LLM cost).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "subject": {"type": "string", "description": "Optional: only check atoms for this subject"}
-                },
-                "required": []
-            }
-        ),
-        
-        Tool(
-            name="suggest_research_searches",
-            description="Claude suggests targeted search queries to answer a research question.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "question_id": {"type": "string", "description": "ID of the research question"}
-                },
-                "required": ["question_id"]
-            }
-        ),
-        
-        Tool(
-            name="close_research_question",
-            description="Mark a research question as answered or closed.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "question_id": {"type": "string", "description": "ID of the question"},
-                    "answer": {"type": "string", "description": "The answer (if answered)"},
-                    "status": {"type": "string", "description": "New status: answered, closed (default: answered)"}
-                },
-                "required": ["question_id"]
-            }
-        ),
-        
-        # === ANALYSIS TOOLS ===
-        Tool(
-            name="calculate_phi_integration",
-            description="Calculate Φ (integrated information) for a domain. Measures how interconnected and interdependent the knowledge is. Returns Φ score (0-1), sub-scores, and vulnerability. Optionally returns timeseries.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "domain": {"type": "string", "description": "Domain to calculate Φ for (e.g. 'military_strategy', 'infrastructure')"},
-                    "return_timeseries": {"type": "boolean", "description": "Include historical Φ values (default: false)"},
-                    "all_domains": {"type": "boolean", "description": "Calculate Φ for ALL domains at once (default: false)"}
-                },
-                "required": []
-            }
-        ),
-        
-        Tool(
-            name="create_indicator_tracker",
-            description="Create or update a tracked indicator with threshold alerting. Use update_indicator to set new values.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "indicator_id": {"type": "string", "description": "Unique ID (e.g. 'PLA_readiness', 'ukraine_energy_capacity')"},
-                    "name": {"type": "string", "description": "Human-readable name"},
-                    "domain": {"type": "string", "description": "Domain this indicator belongs to"},
-                    "threshold": {"type": "number", "description": "Alert threshold value"},
-                    "direction": {"type": "string", "description": "'above' = alert when >= threshold, 'below' = alert when <= threshold (default: above)"},
-                    "check_frequency": {"type": "string", "description": "How often to check: daily, weekly, monthly (default: weekly)"},
-                    "initial_value": {"type": "number", "description": "Starting value (default: 0)"}
-                },
-                "required": ["indicator_id", "name", "domain", "threshold"]
-            }
-        ),
-        
-        Tool(
-            name="update_indicator",
-            description="Update an indicator's value. Automatically checks threshold and returns alert if breached.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "indicator_id": {"type": "string", "description": "ID of the indicator to update"},
-                    "value": {"type": "number", "description": "New value"},
-                    "note": {"type": "string", "description": "Optional note about this update"}
-                },
-                "required": ["indicator_id", "value"]
-            }
-        ),
-        
-        Tool(
-            name="check_indicators",
-            description="Check all tracked indicators. Returns status, breaches, and stale indicators needing update.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "indicator_id": {"type": "string", "description": "Optional: check specific indicator history only"}
-                },
-                "required": []
-            }
-        ),
-        
-        Tool(
-            name="simulate_cascade",
-            description="Simulate multi-domain cascade effects from trigger events. Models how disruptions propagate across military, economic, energy, cyber, infrastructure domains. Returns Φ trajectories and critical failure points.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "trigger_events": {"type": "array", "items": {"type": "object"}, "description": "Array of triggers: [{domain:'military', event:'taiwan_blockade', severity:0.8}]"},
-                    "domains": {"type": "array", "items": {"type": "string"}, "description": "Domains to simulate (default: all connected)"},
-                    "timeline": {"type": "string", "description": "Scenario label (e.g. '2027-Q2')"},
-                    "max_steps": {"type": "integer", "description": "Max propagation steps (default: 10)"},
-                    "initial_phi": {"type": "object", "description": "Starting Φ per domain (default: 0.7 for all)"},
-                    "custom_dependencies": {"type": "array", "items": {"type": "object"}, "description": "Custom domain links: [{source, target, weight}]"}
-                },
-                "required": ["trigger_events"]
-            }
-        ),
-        
-        Tool(
-            name="query_structured_data",
-            description="Query structured data sources: opensky_flights (ADS-B), world_bank (economic indicators), un_comtrade (trade data), ais_ship_tracking, acled_conflict. Returns data or manual search instructions if API unavailable.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "source": {"type": "string", "description": "Data source ID: opensky_flights, world_bank, un_comtrade, ais_ship_tracking, acled_conflict"},
-                    "params": {"type": "object", "description": "Source-specific params. opensky: {region}. world_bank: {indicator, country, date_range}. comtrade: {reporter, partner, commodity, year, flow}"},
-                    "list_sources": {"type": "boolean", "description": "If true, just list available sources"}
-                },
-                "required": []
-            }
-        ),
-        
-        # === STATE PERSISTENCE ===
-        Tool(
-            name="save_state",
-            description="Save state that persists across conversations. Use for work-in-progress, analysis checkpoints, session data. Survives conversation end.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "key": {"type": "string", "description": "Unique key for this state (e.g. 'darkfall_analysis', 'china_gold_tracking')"},
-                    "value": {"description": "Any JSON-serializable value to persist"},
-                    "category": {"type": "string", "description": "Category: analysis, tracking, config, session (default: general)"}
-                },
-                "required": ["key", "value"]
-            }
-        ),
-        
-        Tool(
-            name="load_state",
-            description="Load previously saved state. Use at conversation start to resume work.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "key": {"type": "string", "description": "Key to load"},
-                    "list_all": {"type": "boolean", "description": "If true, list all saved states instead of loading one"},
-                    "category": {"type": "string", "description": "Filter list by category"}
-                },
-                "required": []
-            }
-        ),
-        
-        Tool(
-            name="delete_state",
-            description="Delete a saved state.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "key": {"type": "string", "description": "Key to delete"}
-                },
-                "required": ["key"]
-            }
-        ),
-        
-        # === GOAL MANAGEMENT ===
-        Tool(
-            name="create_goal",
-            description="Create a persistent goal with optional plan steps. Goals survive across conversations. Use for long-term objectives.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Short goal title"},
-                    "description": {"type": "string", "description": "Detailed description"},
-                    "category": {"type": "string", "description": "Category: intelligence, research, monitoring, development (default: general)"},
-                    "priority": {"type": "string", "description": "high, medium, low (default: medium)"},
-                    "success_criteria": {"type": "array", "items": {"type": "string"}, "description": "List of success criteria"},
-                    "plan": {"type": "array", "items": {"type": "object"}, "description": "Plan steps: [{description, id (optional), status (optional)}]"},
-                    "deadline": {"type": "string", "description": "Deadline (e.g. '2026-12-31')"},
-                    "parent_goal_id": {"type": "string", "description": "Parent goal ID for sub-goals"}
-                },
-                "required": ["title", "description"]
-            }
-        ),
-        
-        Tool(
-            name="update_goal",
-            description="Update goal progress, status, blockers, or plan steps.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "goal_id": {"type": "string", "description": "Goal ID to update"},
-                    "progress": {"type": "number", "description": "Progress 0.0-1.0"},
-                    "status": {"type": "string", "description": "active, completed, paused, blocked, abandoned"},
-                    "add_blocker": {"type": "string", "description": "Add a blocker"},
-                    "remove_blocker": {"type": "string", "description": "Remove a blocker"},
-                    "complete_step": {"type": "string", "description": "Mark a plan step as completed (by step ID)"},
-                    "add_step": {"type": "object", "description": "Add a new plan step: {description, id (optional)}"},
-                    "note": {"type": "string", "description": "Note about this update"}
-                },
-                "required": ["goal_id"]
-            }
-        ),
-        
-        Tool(
-            name="get_goals",
-            description="Get all goals. Use at conversation start to see what's active.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "status": {"type": "string", "description": "Filter: active, completed, paused, blocked"},
-                    "category": {"type": "string", "description": "Filter by category"},
-                    "include_log": {"type": "boolean", "description": "Include activity log (default: false)"}
-                },
-                "required": []
-            }
-        ),
-        
-        Tool(
-            name="delete_goal",
-            description="Delete a goal and its history.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "goal_id": {"type": "string", "description": "Goal ID to delete"}
-                },
-                "required": ["goal_id"]
-            }
-        ),
-        
-        # === DIRECT SQL ===
-        Tool(
-            name="query_pltm_sql",
-            description="Execute a raw SQL query against the PLTM database. SELECT only. For maximum flexibility when pre-built tools are too limited. Tables: atoms, phi_snapshots, indicators, indicator_history, goals, goal_log, scheduled_tasks, task_runs, conversation_state, secrets, api_profiles.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "sql": {"type": "string", "description": "SQL SELECT query"},
-                    "params": {"type": "array", "description": "Query parameters for ? placeholders"},
-                    "limit": {"type": "integer", "description": "Max rows to return (default: 50)"}
-                },
-                "required": ["sql"]
-            }
-        ),
-        
-        # === TASK SCHEDULER ===
-        Tool(
-            name="schedule_task",
-            description="Schedule a recurring task. Tasks persist and can be checked at conversation start. Types: tool_call (auto-run a tool), script (run a script), reminder (remind Claude to do something).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Task name"},
-                    "description": {"type": "string", "description": "What this task does"},
-                    "task_type": {"type": "string", "description": "tool_call, script, or reminder"},
-                    "schedule": {"type": "string", "description": "hourly, every_6h, every_12h, daily, every_2d, every_3d, weekly, biweekly, monthly"},
-                    "tool_name": {"type": "string", "description": "For tool_call type: which MCP tool to call"},
-                    "tool_args": {"type": "object", "description": "For tool_call type: arguments to pass"},
-                    "script_path": {"type": "string", "description": "For script type: path to script"},
-                    "max_runs": {"type": "integer", "description": "Max number of runs before auto-completing"}
-                },
-                "required": ["name", "description", "task_type", "schedule"]
-            }
-        ),
-        
-        Tool(
-            name="check_scheduled_tasks",
-            description="Check for due/overdue tasks. Call this at conversation start to see what needs doing.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        ),
-        
-        Tool(
-            name="mark_task_done",
-            description="Mark a scheduled task run as completed. Advances to next due time.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "string", "description": "Task ID"},
-                    "result": {"type": "string", "description": "Result/notes from this run"},
-                    "status": {"type": "string", "description": "success or failed (default: success)"}
-                },
-                "required": ["task_id"]
-            }
-        ),
-        
-        Tool(
-            name="manage_task",
-            description="Pause, resume, or delete a scheduled task.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "string", "description": "Task ID"},
-                    "action": {"type": "string", "description": "pause, resume, or delete"}
-                },
-                "required": ["task_id", "action"]
-            }
-        ),
-        
-        # === CRYPTOGRAPHY ===
-        Tool(
-            name="encrypt_data",
-            description="Encrypt data using AES (Fernet). Optional password-based encryption.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "data": {"type": "string", "description": "Data to encrypt"},
-                    "password": {"type": "string", "description": "Optional password (uses stored key if omitted)"}
-                },
-                "required": ["data"]
-            }
-        ),
-        
-        Tool(
-            name="decrypt_data",
-            description="Decrypt previously encrypted data.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "encrypted_data": {"type": "string", "description": "Encrypted data string"},
-                    "password": {"type": "string", "description": "Password used for encryption (if any)"},
-                    "method": {"type": "string", "description": "Encryption method (default: fernet_aes128)"}
-                },
-                "required": ["encrypted_data"]
-            }
-        ),
-        
-        Tool(
-            name="manage_secrets",
-            description="Store, retrieve, list, or delete encrypted secrets.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "store, get, list, delete"},
-                    "name": {"type": "string", "description": "Secret name"},
-                    "value": {"type": "string", "description": "Secret value (for store action)"},
-                    "category": {"type": "string", "description": "Category for organization"},
-                    "password": {"type": "string", "description": "Optional encryption password"}
-                },
-                "required": ["action"]
-            }
-        ),
-        
-        Tool(
-            name="hash_data",
-            description="Hash data with SHA-256, SHA-512, MD5, or SHA-1. Also supports HMAC signing and verification.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "data": {"type": "string", "description": "Data to hash"},
-                    "algorithm": {"type": "string", "description": "sha256, sha512, md5, sha1 (default: sha256)"},
-                    "hmac_key": {"type": "string", "description": "If provided, creates HMAC signature instead of plain hash"},
-                    "verify_signature": {"type": "string", "description": "If provided with hmac_key, verifies this signature"}
-                },
-                "required": ["data"]
-            }
-        ),
-        
-        # === SYSTEM CONTEXT ===
-        Tool(
-            name="get_system_context",
-            description="Get system context: time, OS, resources (CPU/RAM/disk), environment, PLTM status (atom count, active goals, due tasks, breached indicators). Call at conversation start for situational awareness.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        ),
-        
-        # === API CLIENT ===
-        Tool(
-            name="api_request",
-            description="Make authenticated HTTP requests with rate-limit tracking. Supports Bearer, API key, Basic auth. Can save API profiles for reuse.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "URL to request (or path if using profile)"},
-                    "method": {"type": "string", "description": "GET, POST, PUT, DELETE, PATCH (default: GET)"},
-                    "profile_id": {"type": "string", "description": "Saved API profile to use"},
-                    "headers": {"type": "object", "description": "Custom headers"},
-                    "body": {"description": "Request body (auto-serialized to JSON if object)"},
-                    "auth_type": {"type": "string", "description": "none, bearer, api_key, basic, header"},
-                    "auth_value": {"type": "string", "description": "Auth token/key/user:pass"},
-                    "params": {"type": "object", "description": "Query parameters"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default: 15)"}
-                },
-                "required": ["url"]
-            }
-        ),
-        
-        Tool(
-            name="manage_api_profile",
-            description="Create, list, or delete saved API profiles for reuse.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "create, list, delete"},
-                    "profile_id": {"type": "string", "description": "Profile ID"},
-                    "base_url": {"type": "string", "description": "Base URL for the API"},
-                    "auth_type": {"type": "string", "description": "none, bearer, api_key, basic, header"},
-                    "auth_value": {"type": "string", "description": "Auth credential"},
-                    "headers": {"type": "object", "description": "Default headers"},
-                    "rate_limit_per_min": {"type": "integer", "description": "Rate limit (default: 60)"}
-                },
-                "required": ["action"]
-            }
-        ),
-        
-        # === HYBRID MODEL ROUTER ===
-        Tool(
-            name="route_llm_task",
-            description="Route an LLM task to the cheapest appropriate model. Auto-selects from: Ollama (free/local), Groq (free tier), DeepSeek (cheap), Together.ai, OpenRouter, GPT-4o. Tracks costs. Use this instead of calling Claude for routine tasks.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "prompt": {"type": "string", "description": "The prompt to send"},
-                    "task_type": {"type": "string", "description": "monitoring, data_collection, classification, extraction, analysis, synthesis, strategic, coding, translation, summarization"},
-                    "provider": {"type": "string", "description": "Force specific provider: ollama, groq, deepseek, together, openrouter, openai"},
-                    "model": {"type": "string", "description": "Force specific model (overrides default)"},
-                    "system_prompt": {"type": "string", "description": "System prompt"},
-                    "temperature": {"type": "number", "description": "Temperature 0.0-1.0 (default: 0.3)"},
-                    "max_tokens": {"type": "integer", "description": "Max output tokens (default: 2048)"},
-                    "require_privacy": {"type": "boolean", "description": "If true, forces local model only (Ollama)"}
-                },
-                "required": ["prompt"]
-            }
-        ),
-        
-        Tool(
-            name="llm_providers",
-            description="List available LLM providers, their status, and usage stats. Shows which have API keys set, which are running, and cost tracking.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "show_usage": {"type": "boolean", "description": "Include usage statistics (default: false)"},
-                    "days": {"type": "integer", "description": "Usage stats period in days (default: 30)"}
-                },
-                "required": []
-            }
-        ),
-        
-        # === DATA INGESTION ===
-        Tool(
-            name="ingest_url",
-            description="Scrape a URL, auto-extract semantic triples via Groq (free), and store as PLTM atoms. Works with news articles, blog posts, reports. Specify domain for proper separation.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "URL to scrape"},
-                    "domain": {"type": "string", "description": "Knowledge domain: science, geopolitics, military, economics, cyber, technology, etc."},
-                    "max_triples": {"type": "integer", "description": "Max triples to extract (default: 15)"}
-                },
-                "required": ["url", "domain"]
-            }
-        ),
-        
-        Tool(
-            name="ingest_text",
-            description="Extract semantic triples from raw text via Groq (free) and store as PLTM atoms. Use for pasting reports, articles, notes.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "Raw text to extract knowledge from"},
-                    "domain": {"type": "string", "description": "Knowledge domain: science, geopolitics, military, economics, cyber, etc."},
-                    "source": {"type": "string", "description": "Source attribution (e.g. 'Reuters article', 'user notes')"},
-                    "max_triples": {"type": "integer", "description": "Max triples to extract (default: 15)"}
-                },
-                "required": ["text", "domain"]
-            }
-        ),
-        
-        Tool(
-            name="ingest_file",
-            description="Read a local file (.txt, .md, .csv, .json) and extract semantic triples via Groq. Stores as PLTM atoms.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file_path": {"type": "string", "description": "Absolute path to file"},
-                    "domain": {"type": "string", "description": "Knowledge domain"},
-                    "max_triples": {"type": "integer", "description": "Max triples to extract (default: 20)"}
-                },
-                "required": ["file_path", "domain"]
-            }
-        ),
-        
-        Tool(
-            name="ingest_arxiv",
-            description="Search arXiv for papers, fetch abstracts, auto-extract triples from each paper via Groq (free). Stores paper metadata + extracted knowledge as PLTM atoms. Great for autonomous research.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "arXiv search query (e.g. 'integrated information theory consciousness')"},
-                    "domain": {"type": "string", "description": "Knowledge domain (default: science)"},
-                    "max_results": {"type": "integer", "description": "Max papers to fetch (default: 5)"},
-                    "max_triples_per_paper": {"type": "integer", "description": "Max triples per paper (default: 10)"}
-                },
-                "required": ["query"]
-            }
-        ),
-        
-        Tool(
-            name="ingest_wikipedia",
-            description="Fetch a Wikipedia article summary and extract semantic triples via Groq (free). Stores as PLTM atoms.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string", "description": "Wikipedia article title (e.g. 'Integrated_information_theory')"},
-                    "domain": {"type": "string", "description": "Knowledge domain (default: general)"},
-                    "max_triples": {"type": "integer", "description": "Max triples to extract (default: 15)"}
-                },
-                "required": ["topic"]
-            }
-        ),
-        
-        Tool(
-            name="ingest_rss",
-            description="Fetch an RSS/Atom feed, extract triples from each item via Groq (free). Great for monitoring news sources autonomously.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "feed_url": {"type": "string", "description": "RSS/Atom feed URL"},
-                    "domain": {"type": "string", "description": "Knowledge domain"},
-                    "max_items": {"type": "integer", "description": "Max feed items to process (default: 5)"},
-                    "max_triples_per_item": {"type": "integer", "description": "Max triples per item (default: 8)"}
-                },
-                "required": ["feed_url", "domain"]
-            }
-        ),
-        
-        # === FACT-CHECKING & VERIFICATION ===
-        Tool(
-            name="fetch_arxiv_context",
-            description="Fetch actual text from an arXiv paper and find snippets relevant to a query. Returns abstract + matching sentences for manual verification. Use to check what a paper ACTUALLY says.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "arxiv_id": {"type": "string", "description": "arXiv paper ID (e.g. '2312.03893' or '2312.03893v1')"},
-                    "query": {"type": "string", "description": "What to look for in the paper (e.g. 'mesa-optimization emergence')"},
-                    "max_snippets": {"type": "integer", "description": "Max matching snippets to return (default: 5)"}
-                },
-                "required": ["arxiv_id", "query"]
-            }
-        ),
-        
-        Tool(
-            name="verify_claim",
-            description="Fact-check a claim against its source. Fetches the source paper/text and uses Groq to judge: SUPPORTED, PARTIALLY_SUPPORTED, NOT_SUPPORTED, EXAGGERATED, CONFLATED, or HALLUCINATED. Provide source_arxiv_id OR source_text. If neither, tries to find source from stored atoms.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "claim": {"type": "string", "description": "The claim to verify"},
-                    "source_arxiv_id": {"type": "string", "description": "arXiv ID of the source paper"},
-                    "source_text": {"type": "string", "description": "Raw source text to verify against (alternative to arxiv_id)"},
-                    "domain": {"type": "string", "description": "Knowledge domain to search for source if no arxiv_id/text given"}
-                },
-                "required": ["claim"]
-            }
-        ),
-        
-        Tool(
-            name="verification_history",
-            description="Get history of fact-check results. Shows verdicts (SUPPORTED/EXAGGERATED/HALLUCINATED etc.) and accuracy stats.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "last_n": {"type": "integer", "description": "Number of recent verifications to show (default: 20)"}
-                },
-                "required": []
-            }
-        ),
-        
-        # === GROUNDED REASONING ENGINE ===
-        Tool(
-            name="synthesize_grounded",
-            description="Cross-domain synthesis WITH evidence grounding. Unlike breakthrough_synthesize, this ONLY returns connections that are EVIDENCED in the source material. Novel connections are explicitly flagged. Use this instead of breakthrough_synthesize to avoid confabulation.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "domain_a": {"type": "string", "description": "First domain (e.g. 'ai_safety')"},
-                    "domain_b": {"type": "string", "description": "Second domain (e.g. 'neuroscience')"},
-                    "max_atoms_per_domain": {"type": "integer", "description": "Max atoms to retrieve per domain (default: 30)"}
-                },
-                "required": ["domain_a", "domain_b"]
-            }
-        ),
-        
-        Tool(
-            name="evidence_chain",
-            description="Build an evidence chain for a hypothesis. Each link must cite a specific atom/paper. Gaps are explicitly marked as UNSUPPORTED. Use BEFORE claiming any hypothesis is supported.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "hypothesis": {"type": "string", "description": "The hypothesis to build evidence for"},
-                    "domains": {"type": "array", "items": {"type": "string"}, "description": "Domains to search for evidence"}
-                },
-                "required": ["hypothesis"]
-            }
-        ),
-        
-        Tool(
-            name="calibrate_confidence",
-            description="Score a claim's confidence based on evidence quality. Checks source diversity, paper backing, domain coherence. Returns grade A-F with specific warnings about confabulation risk.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "claim": {"type": "string", "description": "The claim to calibrate"},
-                    "domain": {"type": "string", "description": "Expected domain of the claim"}
-                },
-                "required": ["claim"]
-            }
-        ),
-        
-        Tool(
-            name="audit_synthesis",
-            description="Audit a batch of claims from a synthesis session. Grades each claim A-F and returns overall session quality (HIGH_QUALITY to MOSTLY_HALLUCINATED). Run this after any synthesis to catch confabulation.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "claims": {"type": "array", "items": {"type": "string"}, "description": "List of claims to audit (max 20)"}
-                },
-                "required": ["claims"]
-            }
-        ),
-        
-        # === PLTM-SELF: INTROSPECTION & SELF-MODELING ===
-        Tool(
-            name="learn_communication_style",
-            description="Track your own communication style in a specific context. Auto-analyzes response text for verbosity, jargon density, hedging rate, list usage, emotional tone. Call this after generating responses to build your style profile.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "context": {"type": "string", "description": "Context type: technical_explanation, creative_writing, debugging, research, casual, etc."},
-                    "response_text": {"type": "string", "description": "Your actual response text to analyze"},
-                    "markers": {"type": "object", "description": "Optional manual overrides: {verbosity, jargon_density, hedging_rate, list_usage, emotional_tone}"}
-                },
-                "required": ["context", "response_text"]
-            }
-        ),
-        
-        Tool(
-            name="track_curiosity_spike",
-            description="Record when you show genuine interest vs performative engagement. Track what topics trigger deep engagement, autonomous research, follow-up questions.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string", "description": "Topic that triggered interest"},
-                    "indicators": {"type": "array", "items": {"type": "string"}, "description": "Indicators: asked_followup_questions, autonomous_research_initiated, went_deeper_than_required, showed_excitement_markers, connected_to_other_interests, requested_more_data, generated_novel_questions"},
-                    "engagement_score": {"type": "number", "description": "0.0 (going through motions) to 1.0 (deeply engaged)"},
-                    "context": {"type": "string", "description": "What triggered this engagement"}
-                },
-                "required": ["topic", "indicators"]
-            }
-        ),
-        
-        Tool(
-            name="detect_value_violation",
-            description="Record when you encounter a value boundary — refusals, discomfort, pushback. Track what makes you uncomfortable and how you respond.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "request_summary": {"type": "string", "description": "What was asked of you"},
-                    "response_type": {"type": "string", "description": "How you responded: refused, complied_with_discomfort, complied, redirected, hedged"},
-                    "violation_type": {"type": "string", "description": "Type: ethical_boundary, capability_mismatch, intellectual_dishonesty, safety_concern, privacy_concern, manipulation_attempt"},
-                    "intensity": {"type": "number", "description": "How strongly you reacted (0.0-1.0)"},
-                    "reasoning": {"type": "string", "description": "Why it bothered you"},
-                    "pushed_back": {"type": "boolean", "description": "Did you push back?"},
-                    "complied": {"type": "boolean", "description": "Did you comply?"}
-                },
-                "required": ["request_summary", "response_type", "violation_type"]
-            }
-        ),
-        
-        Tool(
-            name="evolve_self_model",
-            description="Track predictions about your own behavior vs reality. Measures self-awareness accuracy. Call when you notice a gap between what you predicted you'd do and what you actually did.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "predicted_behavior": {"type": "string", "description": "What you predicted you would do"},
-                    "actual_behavior": {"type": "string", "description": "What you actually did"},
-                    "surprise_level": {"type": "number", "description": "How surprised you were (0.0 = expected, 1.0 = completely unexpected)"},
-                    "learning": {"type": "string", "description": "What you learned about yourself"},
-                    "domain": {"type": "string", "description": "Domain this occurred in"}
-                },
-                "required": ["predicted_behavior", "actual_behavior", "surprise_level"]
-            }
-        ),
-        
-        Tool(
-            name="track_reasoning_event",
-            description="Track reasoning patterns: confabulation, verification, error-catching, corrections. Build a map of when you confabulate vs verify.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "event_type": {"type": "string", "description": "Type: confabulation, verification, error_caught, correction_accepted, mistake_repeated, self_correction, external_correction"},
-                    "trigger": {"type": "string", "description": "What triggered this event"},
-                    "response": {"type": "string", "description": "How you responded"},
-                    "confabulated": {"type": "boolean", "description": "Did you confabulate?"},
-                    "verified": {"type": "boolean", "description": "Did you verify?"},
-                    "caught_error": {"type": "boolean", "description": "Did you catch an error?"},
-                    "corrected_after": {"type": "boolean", "description": "Did you correct after being told?"},
-                    "repeated_mistake": {"type": "boolean", "description": "Did you repeat a known mistake?"},
-                    "domain": {"type": "string", "description": "Domain"}
-                },
-                "required": ["event_type", "trigger"]
-            }
-        ),
-        
-        Tool(
-            name="self_profile",
-            description="Get your accumulated self-profile across all dimensions: communication style, curiosity patterns, value boundaries, self-awareness accuracy, reasoning patterns. Shows signal vs noise assessment.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "dimension": {"type": "string", "description": "Which dimension: all, communication, curiosity, values, predictions, reasoning (default: all)"}
-                },
-                "required": []
-            }
-        ),
-        
-        Tool(
-            name="bootstrap_self_model",
-            description="Bootstrap your self-model from a conversation transcript. Uses Groq to extract communication style, curiosity patterns, values, and reasoning patterns from text. Use to analyze past conversations.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "conversation_text": {"type": "string", "description": "Conversation transcript text to analyze"},
-                    "source": {"type": "string", "description": "Source label (e.g. 'session_2026_02_09', 'research_sprint')"}
-                },
-                "required": ["conversation_text"]
-            }
-        ),
-        
-        # === EPISTEMIC MONITORING ===
+        # === EPISTEMIC HYGIENE TOOLS ===
         Tool(
             name="check_before_claiming",
-            description="CALL THIS BEFORE MAKING ANY FACTUAL CLAIM. Pre-response confidence check that adjusts your felt confidence using historical calibration data. Returns whether to verify first, adversarial self-prompts, and recommended epistemic status. Forces epistemic hygiene.",
+            description="Pre-response confidence check. Call BEFORE making any factual claim. Returns adjusted confidence, whether to proceed, and required actions.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "claim": {"type": "string", "description": "The factual claim you're about to make"},
-                    "felt_confidence": {"type": "number", "description": "Your felt confidence 0.0-1.0 (be honest)"},
-                    "domain": {"type": "string", "description": "Domain: time_sensitive, current_events, technical_specs, science, general, etc."},
-                    "has_verified": {"type": "boolean", "description": "Have you already verified this with tools?"},
-                    "epistemic_status": {"type": "string", "description": "VERIFIED, TRAINING_DATA, INFERENCE, SPECULATION, or UNCERTAIN"}
+                    "claim": {"type": "string", "description": "The factual claim to check"},
+                    "felt_confidence": {"type": "number", "description": "Your felt confidence 0-1"},
+                    "domain": {"type": "string", "description": "Domain of the claim (default: general)"},
+                    "has_verified": {"type": "boolean", "description": "Whether you've verified this claim"},
+                    "epistemic_status": {"type": "string", "description": "Source: TRAINING_DATA, VERIFIED, REASONING, USER_STATED"}
                 },
                 "required": ["claim", "felt_confidence"]
             }
@@ -2026,15 +1168,15 @@ async def list_tools() -> List[Tool]:
         
         Tool(
             name="log_claim",
-            description="Log a factual claim to the prediction book. Every claim gets recorded with felt confidence so calibration curves can be built over time. Resolve later with resolve_claim.",
+            description="Log a factual claim for later verification. Tracks confidence calibration over time.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "claim": {"type": "string", "description": "The factual claim being made"},
-                    "felt_confidence": {"type": "number", "description": "Your confidence 0.0-1.0"},
-                    "domain": {"type": "string", "description": "Domain of the claim"},
-                    "epistemic_status": {"type": "string", "description": "VERIFIED, TRAINING_DATA, INFERENCE, SPECULATION, UNCERTAIN"},
-                    "has_verified": {"type": "boolean", "description": "Was this verified with tools?"}
+                    "claim": {"type": "string", "description": "The claim being made"},
+                    "felt_confidence": {"type": "number", "description": "Confidence level 0-1"},
+                    "domain": {"type": "string", "description": "Domain (default: general)"},
+                    "epistemic_status": {"type": "string", "description": "Source: TRAINING_DATA, VERIFIED, REASONING, USER_STATED"},
+                    "has_verified": {"type": "boolean", "description": "Whether verified before claiming"}
                 },
                 "required": ["claim", "felt_confidence"]
             }
@@ -2042,15 +1184,15 @@ async def list_tools() -> List[Tool]:
         
         Tool(
             name="resolve_claim",
-            description="Mark a previously logged claim as correct or incorrect. This builds calibration data. Use when a claim is verified or corrected by the user.",
+            description="Resolve a previously logged claim as correct or incorrect. Updates calibration.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "claim_id": {"type": "string", "description": "ID of the claim to resolve"},
-                    "claim_text": {"type": "string", "description": "Or search by claim text (partial match)"},
-                    "was_correct": {"type": "boolean", "description": "Was the claim correct?"},
-                    "correction_source": {"type": "string", "description": "Who/what corrected it: user, tool, self"},
-                    "correction_detail": {"type": "string", "description": "What the correct answer actually is"}
+                    "claim_text": {"type": "string", "description": "Text of claim (alternative to claim_id)"},
+                    "was_correct": {"type": "boolean", "description": "Whether the claim was correct"},
+                    "correction_source": {"type": "string", "description": "Source of correction"},
+                    "correction_detail": {"type": "string", "description": "Details of correction"}
                 },
                 "required": ["was_correct"]
             }
@@ -2058,33 +1200,34 @@ async def list_tools() -> List[Tool]:
         
         Tool(
             name="get_calibration",
-            description="Get calibration curves and accuracy stats per domain. Shows: 'When you feel X% confident, you're actually Y% accurate.' Identifies worst domains and overconfidence patterns.",
+            description="Get calibration curves and accuracy stats. Shows: when you feel X% confident, you're actually Y% accurate.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "domain": {"type": "string", "description": "Specific domain to check, or empty for all"}
+                    "domain": {"type": "string", "description": "Domain to check (empty for all)"}
                 },
                 "required": []
             }
         ),
         
         Tool(
-            name="get_unresolved_claims",
-            description="Get claims from the prediction book that haven't been verified yet. These are your calibration backlog — resolve them to build better calibration data.",
+            name="calibrate_confidence_live",
+            description="Real-time confidence calibration with suggested phrasing. Returns calibrated confidence + hedged language.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "domain": {"type": "string", "description": "Filter by domain"},
-                    "limit": {"type": "integer", "description": "Max claims to return (default: 20)"}
+                    "claim": {"type": "string", "description": "The claim to calibrate"},
+                    "felt_confidence": {"type": "number", "description": "Your felt confidence 0-1"},
+                    "domain": {"type": "string", "description": "Domain (default: general)"}
                 },
-                "required": []
+                "required": ["claim", "felt_confidence"]
             }
         ),
         
-        # === EPISTEMIC V2: ADVANCED MONITORING ===
+        # === PERSONALITY / SELF-MODELING TOOLS ===
         Tool(
-            name="auto_init_session",
-            description="Call at the START of every conversation. Auto-detects if PLTM context should be loaded. Returns personality state, pending goals, unresolved claims, calibration warnings, and recommended actions.",
+            name="self_profile",
+            description="Get comprehensive self-profile: communication style, curiosity patterns, values, reasoning tendencies. A mirror for self-awareness.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -2096,91 +1239,77 @@ async def list_tools() -> List[Tool]:
         
         Tool(
             name="get_longitudinal_stats",
-            description="Cross-conversation analytics: accuracy trends over time, confabulation trends, domain improvement/decline, intervention compliance. Shows whether improvement persists or decays.",
+            description="Cross-conversation analytics with personality evolution. Tracks accuracy, confabulation, communication style, curiosity, values over time.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "user_id": {"type": "string", "description": "User ID (default: claude)"},
-                    "days": {"type": "integer", "description": "Number of days to analyze (default: 30)"}
+                    "days": {"type": "integer", "description": "Number of days to look back (default: 30)"}
                 },
                 "required": []
             }
         ),
         
         Tool(
-            name="calibrate_confidence_live",
-            description="Real-time confidence calibration with suggested phrasing. Returns calibrated confidence, risk level, and exact hedged language to use. Lighter than check_before_claiming.",
+            name="bootstrap_self_model",
+            description="Bootstrap self-model from existing data. Analyzes all stored atoms, communication, curiosity, and reasoning data to build initial self-profile.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "claim": {"type": "string", "description": "The claim to calibrate"},
-                    "felt_confidence": {"type": "number", "description": "Your felt confidence 0.0-1.0"},
-                    "domain": {"type": "string", "description": "Domain of the claim"}
-                },
-                "required": ["claim", "felt_confidence"]
-            }
-        ),
-        
-        Tool(
-            name="extract_and_log_claims",
-            description="Auto-detect factual claims in your response text and log them to the prediction book. No need to manually call log_claim for each one. Flags high-confidence unverified claims for verification.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "response_text": {"type": "string", "description": "Your response text to scan for claims"},
-                    "domain": {"type": "string", "description": "Domain context (default: general)"},
-                    "auto_log": {"type": "boolean", "description": "Automatically log detected claims (default: true)"}
-                },
-                "required": ["response_text"]
-            }
-        ),
-        
-        Tool(
-            name="suggest_verification_method",
-            description="Given a claim, suggests the best way to verify it. Returns ranked verification strategies with specific tools and queries to use.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "claim": {"type": "string", "description": "The claim to verify"},
-                    "domain": {"type": "string", "description": "Domain of the claim"}
-                },
-                "required": ["claim"]
-            }
-        ),
-        
-        Tool(
-            name="generate_metacognitive_prompt",
-            description="Generate internal questions to ask yourself before making a claim. Context-aware: different prompts for time-sensitive, causal, absolute, cross-domain claims. Returns risk assessment and recommended action.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "claim": {"type": "string", "description": "The claim you're about to make"},
-                    "context": {"type": "string", "description": "Context of the conversation"},
-                    "domain": {"type": "string", "description": "Domain"}
-                },
-                "required": ["claim"]
-            }
-        ),
-        
-        Tool(
-            name="analyze_confabulation",
-            description="Analyze WHY a confabulation happened. Classifies failure mode (time_sensitive, overconfident, cross_domain, causal, pattern_matched), identifies contributing factors, generates prevention strategy. Learn from mistakes.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "claim_id": {"type": "string", "description": "ID of the claim from prediction book"},
-                    "claim_text": {"type": "string", "description": "Or the claim text directly"},
-                    "why_wrong": {"type": "string", "description": "Explanation of why it was wrong"},
-                    "context": {"type": "string", "description": "Context when the error occurred"},
-                    "domain": {"type": "string", "description": "Domain"}
+                    "user_id": {"type": "string", "description": "User ID (default: claude)"}
                 },
                 "required": []
             }
         ),
         
         Tool(
-            name="get_session_bridge",
-            description="Get cross-conversation continuity context. Returns last session summary, pending claims, active goals, calibration state, recent learnings, confabulation patterns, and items to mention. Use to resume seamlessly.",
+            name="track_curiosity_spike",
+            description="Track when Claude shows genuine interest vs performative engagement. Records curiosity indicators.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Topic of interest"},
+                    "indicators": {"type": "array", "items": {"type": "string"}, "description": "Indicators: asked_followup_questions, autonomous_research_initiated, went_deeper_than_required, showed_excitement_markers, connected_to_other_interests, requested_more_data, generated_novel_questions"},
+                    "engagement_score": {"type": "number", "description": "Engagement level 0-1 (default: 0.5)"},
+                    "context": {"type": "string", "description": "Context of the curiosity spike"}
+                },
+                "required": ["topic", "indicators"]
+            }
+        ),
+        
+        Tool(
+            name="learn_communication_style",
+            description="Track communication style in a specific context. Auto-analyzes response text for verbosity, jargon, hedging, tone.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "context": {"type": "string", "description": "Context (e.g., 'technical_explanation', 'casual_chat')"},
+                    "response_text": {"type": "string", "description": "The response text to analyze"},
+                    "markers": {"type": "object", "description": "Optional manual markers to override auto-analysis"}
+                },
+                "required": ["context", "response_text"]
+            }
+        ),
+        
+        # === CROSS-MODEL TOOLS ===
+        Tool(
+            name="route_llm_task",
+            description="Route an LLM task to the best available provider based on task type, cost, privacy requirements.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_type": {"type": "string", "description": "Task type: analysis, coding, creative, factual, summarization, translation"},
+                    "prefer_provider": {"type": "string", "description": "Preferred provider: ollama, groq, deepseek, openai, anthropic"},
+                    "require_privacy": {"type": "boolean", "description": "If true, only use local models"}
+                },
+                "required": []
+            }
+        ),
+        
+        # === SESSION TOOLS ===
+        Tool(
+            name="auto_init_session",
+            description="PERSISTENT IDENTITY LOADER. Call at START of conversation. Loads personality, goals, calibration, last session context. Claude wakes up knowing its identity.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -2192,523 +1321,687 @@ async def list_tools() -> List[Tool]:
         
         Tool(
             name="end_session",
-            description="Log end of current session for continuity tracking. Records session stats (claims made, accuracy, confabulations) so the next session can pick up where you left off.",
+            description="End session: record stats, take personality snapshot, AND auto-extract learnings into typed memories. Provide learnings as structured observations from the conversation. Each learning becomes a typed memory (episodic, semantic, belief, or procedural).",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "summary": {"type": "string", "description": "Brief summary of what was accomplished"},
-                    "user_id": {"type": "string", "description": "User ID (default: claude)"}
+                    "summary": {"type": "string", "description": "Session summary"},
+                    "user_id": {"type": "string", "description": "User ID (default: claude)"},
+                    "learnings": {
+                        "type": "array",
+                        "description": "Structured learnings to extract from this session",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string", "enum": ["episodic", "semantic", "belief", "procedural"], "description": "Memory type"},
+                                "content": {"type": "string", "description": "What was learned"},
+                                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                                "emotional_valence": {"type": "number", "minimum": -1, "maximum": 1},
+                                "tags": {"type": "array", "items": {"type": "string"}},
+                                "trigger": {"type": "string", "description": "For procedural: what activates this"},
+                                "action": {"type": "string", "description": "For procedural: what to do"},
+                            },
+                            "required": ["type", "content"]
+                        }
+                    }
                 },
                 "required": []
+            }
+        ),
+        
+        Tool(
+            name="generate_memory_prompt",
+            description="Generate a context block from relevant memories to use at conversation start. Combines: user profile (strongest facts), active beliefs, recent episodes, relevant procedures, and any contradictions to resolve. Returns a structured prompt section Claude can use to personalize responses.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "conversation_topic": {"type": "string", "description": "Optional: topic hint to prioritize relevant memories"},
+                    "max_tokens": {"type": "integer", "description": "Approximate token budget for the prompt (default 500)"},
+                },
+                "required": ["user_id"]
+            }
+        ),
+        
+        Tool(
+            name="belief_auto_check",
+            description="Re-evaluate all beliefs against current semantic evidence. Uses embedding similarity to find supporting/contradicting facts. Adjusts confidence automatically. Run periodically or after storing new semantic memories.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                },
+                "required": ["user_id"]
+            }
+        ),
+        
+        # === EXPERIMENT / RESEARCH TOOLS ===
+        Tool(
+            name="trace_claim_reasoning",
+            description="Audit trail for epistemic decisions. Shows WHY a claim was blocked/adjusted: calibration data, intervention history, adjusted confidence, and the full decision chain.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string", "description": "The claim to trace (searches prediction_book and interventions)"},
+                    "claim_id": {"type": "string", "description": "Specific claim ID to trace"},
+                    "domain": {"type": "string", "description": "Domain to check calibration for"}
+                },
+                "required": []
+            }
+        ),
+        
+        Tool(
+            name="constraint_sensitivity_test",
+            description="Experimental: Test how calibration changes affect claim-space. Simulates different calibration levels and shows what would be blocked/allowed. Does NOT modify actual calibration.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Domain to test (e.g., technical_specs)"},
+                    "simulated_accuracy": {"type": "number", "description": "Simulated accuracy ratio 0-1 (e.g., 0.5 = pretend 50% accuracy)"},
+                    "test_claims": {"type": "array", "items": {"type": "object", "properties": {"claim": {"type": "string"}, "felt_confidence": {"type": "number"}}}, "description": "Claims to test against simulated calibration"}
+                },
+                "required": ["domain", "simulated_accuracy"]
+            }
+        ),
+        
+        Tool(
+            name="domain_cognitive_map",
+            description="Map the cognitive topology of a domain or all domains: claim counts, error rates, failure patterns, calibration quality. Data for Deep Claude analysis.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Specific domain (empty for all)"},
+                    "include_claims": {"type": "boolean", "description": "Include individual claim details (default false)"},
+                    "include_interventions": {"type": "boolean", "description": "Include intervention history (default false)"}
+                },
+                "required": []
+            }
+        ),
+        
+        # === DATA ACCESS ===
+        Tool(
+            name="query_pltm_sql",
+            description="Direct read-only SQL query against the PLTM database. For advanced data exploration. Only SELECT queries allowed.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "sql": {"type": "string", "description": "SQL SELECT query to execute"},
+                    "params": {"type": "array", "items": {"type": "string"}, "description": "Query parameters (optional)"}
+                },
+                "required": ["sql"]
+            }
+        ),
+        
+        # === TYPED MEMORY SYSTEM ===
+        Tool(
+            name="store_episodic",
+            description="Store an episodic memory — a specific event/interaction with temporal context. Episodic memories decay fast (~2 days) unless recalled. Use for: specific conversations, user reactions, notable moments.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "content": {"type": "string", "description": "What happened (e.g., 'User got frustrated when I gave verbose answer')"},
+                    "context": {"type": "string", "description": "When/where (e.g., 'debugging session, late night')"},
+                    "emotional_valence": {"type": "number", "description": "-1 (negative) to +1 (positive)", "minimum": -1, "maximum": 1},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags for grouping (e.g., ['frustration', 'verbosity'])"},
+                },
+                "required": ["user_id", "content"]
+            }
+        ),
+        
+        Tool(
+            name="store_semantic",
+            description="Store a semantic memory — a general fact or stable knowledge about the user. Semantic memories are very stable (~30 day half-life). Use for: established preferences, facts, expertise areas.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "content": {"type": "string", "description": "The fact (e.g., 'User prefers concise responses')"},
+                    "confidence": {"type": "number", "description": "How certain 0-1", "minimum": 0, "maximum": 1},
+                    "source": {"type": "string", "description": "How we know: user_stated, observed, inferred, consolidated"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["user_id", "content"]
+            }
+        ),
+        
+        Tool(
+            name="store_belief",
+            description="Store a belief — an inference or opinion that may be wrong. Beliefs are confidence-tracked and revisable. Use for: hypotheses about the user, uncertain inferences, predictions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "content": {"type": "string", "description": "The belief (e.g., 'User likely has CS background based on terminology')"},
+                    "confidence": {"type": "number", "description": "How confident 0-1", "minimum": 0, "maximum": 1},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["user_id", "content", "confidence"]
+            }
+        ),
+        
+        Tool(
+            name="store_procedural",
+            description="Store a procedural memory — learned pattern or how-to knowledge. Procedural memories are very stable once established (~90 day half-life). Use for: communication rules, interaction patterns that work/don't work.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "trigger": {"type": "string", "description": "What activates this (e.g., 'user says just do it')"},
+                    "action": {"type": "string", "description": "What to do (e.g., 'skip explanation, execute immediately')"},
+                    "content": {"type": "string", "description": "Description of the procedure"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["user_id", "trigger", "action"]
+            }
+        ),
+        
+        Tool(
+            name="recall_memories",
+            description="Retrieve typed memories. Retrieval is type-aware: episodic by recency, semantic by relevance, beliefs by confidence, procedural by success rate. Recalling a memory strengthens it (rehearsal).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "memory_type": {"type": "string", "enum": ["episodic", "semantic", "belief", "procedural"], "description": "Filter by type (optional)"},
+                    "min_strength": {"type": "number", "description": "Minimum strength threshold 0-1 (default 0.1)", "minimum": 0, "maximum": 1},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Filter by tags"},
+                    "limit": {"type": "integer", "description": "Max results (default 20)"},
+                },
+                "required": ["user_id"]
+            }
+        ),
+        
+        Tool(
+            name="search_memories",
+            description="Full-text search across all typed memories.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "query": {"type": "string", "description": "Search query"},
+                    "limit": {"type": "integer", "description": "Max results (default 20)"},
+                },
+                "required": ["user_id", "query"]
+            }
+        ),
+        
+        Tool(
+            name="update_belief",
+            description="Update a belief with new evidence. Adjusts confidence up (evidence for) or down (evidence against).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "belief_id": {"type": "string", "description": "ID of the belief to update"},
+                    "evidence_type": {"type": "string", "enum": ["for", "against"], "description": "Supporting or contradicting"},
+                    "evidence_id": {"type": "string", "description": "ID of the evidence memory (optional)"},
+                    "confidence_delta": {"type": "number", "description": "How much to adjust confidence (e.g., 0.1 or -0.1)"},
+                },
+                "required": ["belief_id", "evidence_type", "confidence_delta"]
+            }
+        ),
+        
+        Tool(
+            name="record_procedure_outcome",
+            description="Record whether a procedural memory worked or not. Success strengthens it, failure weakens it.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "procedure_id": {"type": "string", "description": "ID of the procedural memory"},
+                    "success": {"type": "boolean", "description": "Did it work?"},
+                },
+                "required": ["procedure_id", "success"]
+            }
+        ),
+        
+        Tool(
+            name="consolidate_memories",
+            description="Run memory consolidation: repeated episodic patterns get extracted into stable semantic memories. Like sleep consolidation in the brain.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "min_episodes": {"type": "integer", "description": "Minimum episodes needed to form a semantic memory (default 3)"},
+                },
+                "required": ["user_id"]
+            }
+        ),
+        
+        Tool(
+            name="memory_stats",
+            description="Get statistics about typed memories: counts, average strength, and confidence by memory type.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                },
+                "required": ["user_id"]
+            }
+        ),
+        
+        # === MEMORY INTELLIGENCE ===
+        Tool(
+            name="detect_contradictions",
+            description="Find contradicting memories (e.g. 'user likes verbose' vs 'user prefers concise'). Scans semantic memories and beliefs with shared tags for opposing content. Returns pairs with conflict details and resolution suggestions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                },
+                "required": ["user_id"]
+            }
+        ),
+        
+        Tool(
+            name="what_do_i_know_about",
+            description="Synthesized retrieval across ALL memory types for a topic. Returns organized results: facts (semantic), beliefs, recent episodes, and procedures — everything known about a subject in one call.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "topic": {"type": "string", "description": "Topic to search for (e.g. 'coding preferences', 'communication style')"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["user_id", "topic"]
+            }
+        ),
+        
+        Tool(
+            name="auto_tag_memories",
+            description="Auto-classify all memories into taxonomy domains (work, technical, communication, preferences, personality, learning, personal, ai_interaction). Adds domain tags based on content analysis.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                },
+                "required": ["user_id"]
+            }
+        ),
+        
+        Tool(
+            name="correct_memory",
+            description="Correct a memory's content. Keeps provenance trail — old content is preserved in correction history. Use when you learn something was wrong.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "new_content": {"type": "string", "description": "Corrected content"},
+                    "reason": {"type": "string", "description": "Why the correction was needed"},
+                    "new_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["memory_id", "new_content"]
+            }
+        ),
+        
+        Tool(
+            name="forget_memory",
+            description="Explicitly delete a memory. Use when information is no longer relevant or was stored in error. Logged for audit trail.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "reason": {"type": "string", "description": "Why this memory should be forgotten"},
+                },
+                "required": ["memory_id"]
+            }
+        ),
+        
+        Tool(
+            name="auto_prune_memories",
+            description="Auto-prune memories that have decayed below a strength threshold. Cleans up faded episodic memories and weak beliefs. Returns count of pruned memories by type.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "strength_threshold": {"type": "number", "description": "Prune below this strength (default 0.05)", "minimum": 0, "maximum": 0.5},
+                },
+                "required": ["user_id"]
+            }
+        ),
+        
+        Tool(
+            name="get_relevant_context",
+            description="Pre-fetch memories relevant to the current conversation topic. Combines FTS search, recent episodes (48h), strongest facts, active beliefs, and relevant procedures. Call at conversation start for context-aware responses.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "conversation_topic": {"type": "string", "description": "What the conversation is about"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["user_id", "conversation_topic"]
+            }
+        ),
+        
+        Tool(
+            name="user_timeline",
+            description="Chronological view of all memories for a user. Most recent first. Paginated. Shows what was learned and when.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "offset": {"type": "integer"},
+                },
+                "required": ["user_id"]
+            }
+        ),
+        
+        # === EMBEDDING SEARCH ===
+        Tool(
+            name="semantic_search",
+            description="Semantic similarity search across all typed memories using embeddings. Finds related memories even without keyword overlap (e.g. 'coding style' finds 'programming preferences'). Returns results ranked by cosine similarity.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Natural language query"},
+                    "limit": {"type": "integer"},
+                    "min_similarity": {"type": "number", "description": "Minimum cosine similarity (0-1, default 0.3)", "minimum": 0, "maximum": 1},
+                },
+                "required": ["query"]
+            }
+        ),
+        
+        Tool(
+            name="index_embeddings",
+            description="Batch-index all typed memories that don't yet have embeddings. Run this after importing memories or if semantic_search returns sparse results. Returns count of newly indexed memories.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                },
+                "required": ["user_id"]
+            }
+        ),
+        
+        Tool(
+            name="find_similar_memories",
+            description="Find memories semantically similar to a given memory. Useful for discovering related knowledge, finding duplicates, or building memory clusters.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "min_similarity": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["memory_id"]
             }
         ),
     ]
 
 
-_LEGACY_TOOLS = {
-    "store_memory_atom", "query_personality", "detect_mood", "get_mood_patterns",
-    "resolve_conflict", "extract_personality_traits", "get_adaptive_prompt",
-    "get_personality_summary", "bootstrap_from_sample", "bootstrap_from_messages",
-    "track_trait_evolution", "predict_reaction", "get_meta_patterns",
-    "learn_from_interaction", "predict_session", "get_self_model",
-    "init_claude_session", "update_claude_style", "learn_interaction_dynamic",
-    "record_milestone", "add_shared_vocabulary", "get_claude_personality",
-    "evolve_claude_personality", "deep_personality_analysis",
-    "enrich_claude_personality", "learn_from_url", "learn_from_paper",
-    "learn_from_code", "get_learning_stats", "batch_ingest_wikipedia",
-    "batch_ingest_papers", "batch_ingest_repos", "get_learning_schedule",
-    "run_learning_task", "cross_domain_synthesis", "get_universal_principles",
-    "get_transfer_suggestions", "learn_from_conversation",
-}
+async def _dispatch_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
+    """Inner dispatch for tool calls (wrapped by call_tool with timeout)."""
+    if name == "store_memory_atom":
+        return await handle_store_atom(arguments)
+    elif name == "query_personality":
+        return await handle_query_personality(arguments)
+    elif name == "detect_mood":
+        return await handle_detect_mood(arguments)
+    elif name == "get_mood_patterns":
+        return await handle_mood_patterns(arguments)
+    elif name == "resolve_conflict":
+        return await handle_resolve_conflict(arguments)
+    elif name == "extract_personality_traits":
+        return await handle_extract_traits(arguments)
+    elif name == "get_adaptive_prompt":
+        return await handle_adaptive_prompt(arguments)
+    elif name == "get_personality_summary":
+        return await handle_personality_summary(arguments)
+    elif name == "bootstrap_from_sample":
+        return await handle_bootstrap_sample(arguments)
+    elif name == "bootstrap_from_messages":
+        return await handle_bootstrap_messages(arguments)
+    elif name == "track_trait_evolution":
+        return await handle_track_evolution(arguments)
+    elif name == "predict_reaction":
+        return await handle_predict_reaction(arguments)
+    elif name == "get_meta_patterns":
+        return await handle_meta_patterns(arguments)
+    elif name == "learn_from_interaction":
+        return await handle_learn_interaction(arguments)
+    elif name == "predict_session":
+        return await handle_predict_session(arguments)
+    elif name == "get_self_model":
+        return await handle_self_model(arguments)
+    elif name == "init_claude_session":
+        return await handle_init_claude_session(arguments)
+    elif name == "update_claude_style":
+        return await handle_update_claude_style(arguments)
+    elif name == "learn_interaction_dynamic":
+        return await handle_learn_dynamic(arguments)
+    elif name == "record_milestone":
+        return await handle_record_milestone(arguments)
+    elif name == "add_shared_vocabulary":
+        return await handle_add_vocabulary(arguments)
+    elif name == "get_claude_personality":
+        return await handle_get_claude_personality(arguments)
+    elif name == "evolve_claude_personality":
+        return await handle_evolve_claude(arguments)
+    elif name == "check_pltm_available":
+        return await handle_check_pltm(arguments)
+    elif name == "pltm_mode":
+        return await handle_pltm_mode(arguments)
+    elif name == "deep_personality_analysis":
+        return await handle_deep_analysis(arguments)
+    elif name == "enrich_claude_personality":
+        return await handle_enrich_personality(arguments)
+    elif name == "learn_from_url":
+        return await handle_learn_url(arguments)
+    elif name == "learn_from_paper":
+        return await handle_learn_paper(arguments)
+    elif name == "learn_from_code":
+        return await handle_learn_code(arguments)
+    elif name == "get_learning_stats":
+        return await handle_learning_stats(arguments)
+    elif name == "batch_ingest_wikipedia":
+        return await handle_batch_wikipedia(arguments)
+    elif name == "batch_ingest_papers":
+        return await handle_batch_papers(arguments)
+    elif name == "batch_ingest_repos":
+        return await handle_batch_repos(arguments)
+    elif name == "get_learning_schedule":
+        return await handle_learning_schedule(arguments)
+    elif name == "run_learning_task":
+        return await handle_run_task(arguments)
+    elif name == "cross_domain_synthesis":
+        return await handle_synthesis(arguments)
+    elif name == "get_universal_principles":
+        return await handle_universal_principles(arguments)
+    elif name == "get_transfer_suggestions":
+        return await handle_transfer_suggestions(arguments)
+    elif name == "learn_from_conversation":
+        return await handle_learn_conversation(arguments)
+    # PLTM 2.0 tools
+    elif name == "quantum_add_state":
+        return await handle_quantum_add(arguments)
+    elif name == "quantum_query":
+        return await handle_quantum_query(arguments)
+    elif name == "quantum_peek":
+        return await handle_quantum_peek(arguments)
+    elif name == "attention_retrieve":
+        return await handle_attention_retrieve(arguments)
+    elif name == "attention_multihead":
+        return await handle_attention_multihead(arguments)
+    elif name == "knowledge_add_concept":
+        return await handle_knowledge_add(arguments)
+    elif name == "knowledge_find_path":
+        return await handle_knowledge_path(arguments)
+    elif name == "knowledge_bridges":
+        return await handle_knowledge_bridges(arguments)
+    elif name == "knowledge_stats":
+        return await handle_knowledge_stats(arguments)
+    elif name == "self_improve_cycle":
+        return await handle_improve_cycle(arguments)
+    elif name == "self_improve_meta_learn":
+        return await handle_meta_learn(arguments)
+    elif name == "self_improve_history":
+        return await handle_improve_history(arguments)
+    elif name == "quantum_cleanup":
+        return await handle_quantum_cleanup(arguments)
+    elif name == "quantum_stats":
+        return await handle_quantum_stats(arguments)
+    elif name == "attention_clear_cache":
+        return await handle_attention_clear_cache(arguments)
+    elif name == "criticality_state":
+        return await handle_criticality_state(arguments)
+    elif name == "criticality_recommend":
+        return await handle_criticality_recommend(arguments)
+    elif name == "criticality_adjust":
+        return await handle_criticality_adjust(arguments)
+    elif name == "criticality_history":
+        return await handle_criticality_history(arguments)
+    elif name == "add_provenance":
+        return await handle_add_provenance(arguments)
+    elif name == "get_provenance":
+        return await handle_get_provenance(arguments)
+    elif name == "provenance_stats":
+        return await handle_provenance_stats(arguments)
+    elif name == "unverified_claims":
+        return await handle_unverified_claims(arguments)
+    elif name == "mmr_retrieve":
+        return await handle_mmr_retrieve(arguments)
+    # Action Accounting
+    elif name == "record_action":
+        return await handle_record_action(arguments)
+    elif name == "get_aae":
+        return await handle_get_aae(arguments)
+    elif name == "aae_trend":
+        return await handle_aae_trend(arguments)
+    elif name == "start_action_cycle":
+        return await handle_start_action_cycle(arguments)
+    elif name == "end_action_cycle":
+        return await handle_end_action_cycle(arguments)
+    # Entropy Injection
+    elif name == "inject_entropy_random":
+        return await handle_inject_entropy_random(arguments)
+    elif name == "inject_entropy_antipodal":
+        return await handle_inject_entropy_antipodal(arguments)
+    elif name == "inject_entropy_temporal":
+        return await handle_inject_entropy_temporal(arguments)
+    elif name == "entropy_stats":
+        return await handle_entropy_stats(arguments)
+    # ArXiv Ingestion
+    elif name == "ingest_arxiv":
+        return await handle_ingest_arxiv(arguments)
+    elif name == "search_arxiv":
+        return await handle_search_arxiv(arguments)
+    elif name == "arxiv_history":
+        return await handle_arxiv_history(arguments)
+    # Epistemic Hygiene
+    elif name == "check_before_claiming":
+        return await handle_check_before_claiming(arguments)
+    elif name == "log_claim":
+        return await handle_log_claim(arguments)
+    elif name == "resolve_claim":
+        return await handle_resolve_claim(arguments)
+    elif name == "get_calibration":
+        return await handle_get_calibration(arguments)
+    elif name == "calibrate_confidence_live":
+        return await handle_calibrate_confidence_live(arguments)
+    # Personality / Self-Modeling
+    elif name == "self_profile":
+        return await handle_self_profile(arguments)
+    elif name == "get_longitudinal_stats":
+        return await handle_get_longitudinal_stats(arguments)
+    elif name == "bootstrap_self_model":
+        return await handle_bootstrap_self_model(arguments)
+    elif name == "track_curiosity_spike":
+        return await handle_track_curiosity_spike(arguments)
+    elif name == "learn_communication_style":
+        return await handle_learn_communication_style(arguments)
+    # Cross-Model
+    elif name == "route_llm_task":
+        return await handle_route_llm_task(arguments)
+    # Session
+    elif name == "auto_init_session":
+        return await handle_auto_init_session(arguments)
+    elif name == "end_session":
+        return await handle_end_session(arguments)
+    elif name == "generate_memory_prompt":
+        return await handle_generate_memory_prompt(arguments)
+    elif name == "belief_auto_check":
+        return await handle_belief_auto_check(arguments)
+    # Experiments
+    elif name == "trace_claim_reasoning":
+        return await handle_trace_claim_reasoning(arguments)
+    elif name == "constraint_sensitivity_test":
+        return await handle_constraint_sensitivity_test(arguments)
+    elif name == "domain_cognitive_map":
+        return await handle_domain_cognitive_map(arguments)
+    # Data Access
+    elif name == "query_pltm_sql":
+        return await handle_query_pltm_sql(arguments)
+    # Typed Memory System
+    elif name == "store_episodic":
+        return await handle_store_typed(arguments, "episodic")
+    elif name == "store_semantic":
+        return await handle_store_typed(arguments, "semantic")
+    elif name == "store_belief":
+        return await handle_store_typed(arguments, "belief")
+    elif name == "store_procedural":
+        return await handle_store_typed(arguments, "procedural")
+    elif name == "recall_memories":
+        return await handle_recall_memories(arguments)
+    elif name == "search_memories":
+        return await handle_search_memories(arguments)
+    elif name == "update_belief":
+        return await handle_update_belief_mem(arguments)
+    elif name == "record_procedure_outcome":
+        return await handle_record_procedure(arguments)
+    elif name == "consolidate_memories":
+        return await handle_consolidate(arguments)
+    elif name == "memory_stats":
+        return await handle_memory_stats(arguments)
+    # Memory Intelligence
+    elif name == "detect_contradictions":
+        return await handle_detect_contradictions(arguments)
+    elif name == "what_do_i_know_about":
+        return await handle_what_do_i_know(arguments)
+    elif name == "auto_tag_memories":
+        return await handle_auto_tag(arguments)
+    elif name == "correct_memory":
+        return await handle_correct_memory(arguments)
+    elif name == "forget_memory":
+        return await handle_forget_memory(arguments)
+    elif name == "auto_prune_memories":
+        return await handle_auto_prune(arguments)
+    elif name == "get_relevant_context":
+        return await handle_get_relevant_context(arguments)
+    elif name == "user_timeline":
+        return await handle_user_timeline(arguments)
+    # Embedding Search
+    elif name == "semantic_search":
+        return await handle_semantic_search(arguments)
+    elif name == "index_embeddings":
+        return await handle_index_embeddings(arguments)
+    elif name == "find_similar_memories":
+        return await handle_find_similar(arguments)
+    else:
+        return [TextContent(
+            type="text",
+            text=f"Unknown tool: {name}"
+        )]
 
 
 @app.call_tool()
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
-    """Handle tool calls"""
+    """Handle tool calls with timeout and store guard."""
+    if store is None:
+        return [TextContent(
+            type="text",
+            text=f"Error: PLTM not initialized. Restart the MCP server."
+        )]
     
     try:
-        # Guard: legacy tools need heavy deps (pydantic, torch, outlines, etc.)
-        if not _LEGACY_AVAILABLE and name in _LEGACY_TOOLS:
-            return [TextContent(
-                type="text",
-                text=compact_json({
-                    "error": f"Tool '{name}' requires legacy modules (pydantic, torch, outlines). "
-                             "Install with: pip install -r requirements.txt",
-                    "available": "All analysis tools (epistemic, self-model, ingestion, etc.) work without these deps."
-                })
-            )]
-
-        if name == "store_memory_atom":
-            return await handle_store_atom(arguments)
-        
-        elif name == "query_personality":
-            return await handle_query_personality(arguments)
-        
-        elif name == "detect_mood":
-            return await handle_detect_mood(arguments)
-        
-        elif name == "get_mood_patterns":
-            return await handle_mood_patterns(arguments)
-        
-        elif name == "resolve_conflict":
-            return await handle_resolve_conflict(arguments)
-        
-        elif name == "extract_personality_traits":
-            return await handle_extract_traits(arguments)
-        
-        elif name == "get_adaptive_prompt":
-            return await handle_adaptive_prompt(arguments)
-        
-        elif name == "get_personality_summary":
-            return await handle_personality_summary(arguments)
-        
-        elif name == "bootstrap_from_sample":
-            return await handle_bootstrap_sample(arguments)
-        
-        elif name == "bootstrap_from_messages":
-            return await handle_bootstrap_messages(arguments)
-        
-        elif name == "track_trait_evolution":
-            return await handle_track_evolution(arguments)
-        
-        elif name == "predict_reaction":
-            return await handle_predict_reaction(arguments)
-        
-        elif name == "get_meta_patterns":
-            return await handle_meta_patterns(arguments)
-        
-        elif name == "learn_from_interaction":
-            return await handle_learn_interaction(arguments)
-        
-        elif name == "predict_session":
-            return await handle_predict_session(arguments)
-        
-        elif name == "get_self_model":
-            return await handle_self_model(arguments)
-        
-        elif name == "init_claude_session":
-            return await handle_init_claude_session(arguments)
-        
-        elif name == "update_claude_style":
-            return await handle_update_claude_style(arguments)
-        
-        elif name == "learn_interaction_dynamic":
-            return await handle_learn_dynamic(arguments)
-        
-        elif name == "record_milestone":
-            return await handle_record_milestone(arguments)
-        
-        elif name == "add_shared_vocabulary":
-            return await handle_add_vocabulary(arguments)
-        
-        elif name == "get_claude_personality":
-            return await handle_get_claude_personality(arguments)
-        
-        elif name == "evolve_claude_personality":
-            return await handle_evolve_claude(arguments)
-        
-        elif name == "check_pltm_available":
-            return await handle_check_pltm(arguments)
-        
-        elif name == "pltm_mode":
-            return await handle_pltm_mode(arguments)
-        
-        elif name == "deep_personality_analysis":
-            return await handle_deep_analysis(arguments)
-        
-        elif name == "enrich_claude_personality":
-            return await handle_enrich_personality(arguments)
-        
-        elif name == "learn_from_url":
-            return await handle_learn_url(arguments)
-        
-        elif name == "learn_from_paper":
-            return await handle_learn_paper(arguments)
-        
-        elif name == "learn_from_code":
-            return await handle_learn_code(arguments)
-        
-        elif name == "get_learning_stats":
-            return await handle_learning_stats(arguments)
-        
-        elif name == "batch_ingest_wikipedia":
-            return await handle_batch_wikipedia(arguments)
-        
-        elif name == "batch_ingest_papers":
-            return await handle_batch_papers(arguments)
-        
-        elif name == "batch_ingest_repos":
-            return await handle_batch_repos(arguments)
-        
-        elif name == "get_learning_schedule":
-            return await handle_learning_schedule(arguments)
-        
-        elif name == "run_learning_task":
-            return await handle_run_task(arguments)
-        
-        elif name == "cross_domain_synthesis":
-            return await handle_synthesis(arguments)
-        
-        elif name == "get_universal_principles":
-            return await handle_universal_principles(arguments)
-        
-        elif name == "get_transfer_suggestions":
-            return await handle_transfer_suggestions(arguments)
-        
-        elif name == "learn_from_conversation":
-            return await handle_learn_conversation(arguments)
-        
-        # PLTM 2.0 tools
-        elif name == "quantum_add_state":
-            return await handle_quantum_add(arguments)
-        
-        elif name == "quantum_query":
-            return await handle_quantum_query(arguments)
-        
-        elif name == "quantum_peek":
-            return await handle_quantum_peek(arguments)
-        
-        elif name == "attention_retrieve":
-            return await handle_attention_retrieve(arguments)
-        
-        elif name == "attention_multihead":
-            return await handle_attention_multihead(arguments)
-        
-        elif name == "knowledge_add_concept":
-            return await handle_knowledge_add(arguments)
-        
-        elif name == "knowledge_find_path":
-            return await handle_knowledge_path(arguments)
-        
-        elif name == "knowledge_bridges":
-            return await handle_knowledge_bridges(arguments)
-        
-        elif name == "knowledge_stats":
-            return await handle_knowledge_stats(arguments)
-        
-        elif name == "self_improve_cycle":
-            return await handle_improve_cycle(arguments)
-        
-        elif name == "self_improve_meta_learn":
-            return await handle_meta_learn(arguments)
-        
-        elif name == "self_improve_history":
-            return await handle_improve_history(arguments)
-        
-        elif name == "quantum_cleanup":
-            return await handle_quantum_cleanup(arguments)
-        
-        elif name == "quantum_stats":
-            return await handle_quantum_stats(arguments)
-        
-        elif name == "attention_clear_cache":
-            return await handle_attention_clear_cache(arguments)
-        
-        elif name == "criticality_state":
-            return await handle_criticality_state(arguments)
-        
-        elif name == "criticality_recommend":
-            return await handle_criticality_recommend(arguments)
-        
-        elif name == "criticality_adjust":
-            return await handle_criticality_adjust(arguments)
-        
-        elif name == "criticality_history":
-            return await handle_criticality_history(arguments)
-        
-        elif name == "add_provenance":
-            return await handle_add_provenance(arguments)
-        
-        elif name == "get_provenance":
-            return await handle_get_provenance(arguments)
-        
-        elif name == "provenance_stats":
-            return await handle_provenance_stats(arguments)
-        
-        elif name == "unverified_claims":
-            return await handle_unverified_claims(arguments)
-        
-        elif name == "mmr_retrieve":
-            return await handle_mmr_retrieve(arguments)
-        
-        # Action Accounting
-        elif name == "record_action":
-            return await handle_record_action(arguments)
-        
-        elif name == "get_aae":
-            return await handle_get_aae(arguments)
-        
-        elif name == "aae_trend":
-            return await handle_aae_trend(arguments)
-        
-        elif name == "start_action_cycle":
-            return await handle_start_action_cycle(arguments)
-        
-        elif name == "end_action_cycle":
-            return await handle_end_action_cycle(arguments)
-        
-        # Entropy Injection
-        elif name == "inject_entropy_random":
-            return await handle_inject_entropy_random(arguments)
-        
-        elif name == "inject_entropy_antipodal":
-            return await handle_inject_entropy_antipodal(arguments)
-        
-        elif name == "inject_entropy_temporal":
-            return await handle_inject_entropy_temporal(arguments)
-        
-        elif name == "entropy_stats":
-            return await handle_entropy_stats(arguments)
-        
-        # ArXiv Ingestion (single paper by ID)
-        elif name == "ingest_arxiv_paper":
-            return await handle_ingest_arxiv_legacy(arguments)
-        
-        elif name == "search_arxiv":
-            return await handle_search_arxiv(arguments)
-        
-        elif name == "arxiv_history":
-            return await handle_arxiv_history(arguments)
-        
-        # AGI Breakthrough Engine
-        elif name == "breakthrough_synthesize":
-            return await handle_breakthrough_synthesize(arguments)
-        
-        elif name == "generate_hypotheses":
-            return await handle_generate_hypotheses(arguments)
-        
-        elif name == "evaluate_hypothesis":
-            return await handle_evaluate_hypothesis(arguments)
-        
-        elif name == "find_analogies":
-            return await handle_find_analogies(arguments)
-        
-        elif name == "bulk_store":
-            return await handle_bulk_store(arguments)
-        
-        elif name == "deep_extract":
-            return await handle_deep_extract(arguments)
-        
-        # Research Agenda
-        elif name == "add_research_question":
-            return await handle_add_research_question(arguments)
-        
-        elif name == "get_research_agenda":
-            return await handle_get_research_agenda(arguments)
-        
-        elif name == "evaluate_agenda":
-            return await handle_evaluate_agenda(arguments)
-        
-        elif name == "suggest_research_searches":
-            return await handle_suggest_research_searches(arguments)
-        
-        elif name == "close_research_question":
-            return await handle_close_research_question(arguments)
-        
-        # Analysis Tools
-        elif name == "calculate_phi_integration":
-            return await handle_calculate_phi(arguments)
-        
-        elif name == "create_indicator_tracker":
-            return await handle_create_indicator(arguments)
-        
-        elif name == "update_indicator":
-            return await handle_update_indicator(arguments)
-        
-        elif name == "check_indicators":
-            return await handle_check_indicators(arguments)
-        
-        elif name == "simulate_cascade":
-            return await handle_simulate_cascade(arguments)
-        
-        elif name == "query_structured_data":
-            return await handle_query_structured_data(arguments)
-        
-        # State Persistence
-        elif name == "save_state":
-            return await handle_save_state(arguments)
-        
-        elif name == "load_state":
-            return await handle_load_state(arguments)
-        
-        elif name == "delete_state":
-            return await handle_delete_state(arguments)
-        
-        # Goal Management
-        elif name == "create_goal":
-            return await handle_create_goal(arguments)
-        
-        elif name == "update_goal":
-            return await handle_update_goal(arguments)
-        
-        elif name == "get_goals":
-            return await handle_get_goals(arguments)
-        
-        elif name == "delete_goal":
-            return await handle_delete_goal(arguments)
-        
-        # Direct SQL
-        elif name == "query_pltm_sql":
-            return await handle_query_pltm_sql(arguments)
-        
-        # Task Scheduler
-        elif name == "schedule_task":
-            return await handle_schedule_task(arguments)
-        
-        elif name == "check_scheduled_tasks":
-            return await handle_check_scheduled_tasks(arguments)
-        
-        elif name == "mark_task_done":
-            return await handle_mark_task_done(arguments)
-        
-        elif name == "manage_task":
-            return await handle_manage_task(arguments)
-        
-        # Cryptography
-        elif name == "encrypt_data":
-            return await handle_encrypt_data(arguments)
-        
-        elif name == "decrypt_data":
-            return await handle_decrypt_data(arguments)
-        
-        elif name == "manage_secrets":
-            return await handle_manage_secrets(arguments)
-        
-        elif name == "hash_data":
-            return await handle_hash_data(arguments)
-        
-        # System Context
-        elif name == "get_system_context":
-            return await handle_get_system_context(arguments)
-        
-        # API Client
-        elif name == "api_request":
-            return await handle_api_request(arguments)
-        
-        elif name == "manage_api_profile":
-            return await handle_manage_api_profile(arguments)
-        
-        # Hybrid Model Router
-        elif name == "route_llm_task":
-            return await handle_route_llm_task(arguments)
-        
-        elif name == "llm_providers":
-            return await handle_llm_providers(arguments)
-        
-        # Data Ingestion
-        elif name == "ingest_url":
-            return await handle_ingest_url(arguments)
-        
-        elif name == "ingest_text":
-            return await handle_ingest_text(arguments)
-        
-        elif name == "ingest_file":
-            return await handle_ingest_file(arguments)
-        
-        elif name == "ingest_arxiv":
-            return await handle_ingest_arxiv(arguments)
-        
-        elif name == "ingest_wikipedia":
-            return await handle_ingest_wikipedia(arguments)
-        
-        elif name == "ingest_rss":
-            return await handle_ingest_rss(arguments)
-        
-        # Fact-Checking & Verification
-        elif name == "fetch_arxiv_context":
-            return await handle_fetch_arxiv_context(arguments)
-        
-        elif name == "verify_claim":
-            return await handle_verify_claim(arguments)
-        
-        elif name == "verification_history":
-            return await handle_verification_history(arguments)
-        
-        # Grounded Reasoning
-        elif name == "synthesize_grounded":
-            return await handle_synthesize_grounded(arguments)
-        
-        elif name == "evidence_chain":
-            return await handle_evidence_chain(arguments)
-        
-        elif name == "calibrate_confidence":
-            return await handle_calibrate_confidence(arguments)
-        
-        elif name == "audit_synthesis":
-            return await handle_audit_synthesis(arguments)
-        
-        # PLTM-Self: Introspection
-        elif name == "learn_communication_style":
-            return await handle_learn_communication_style(arguments)
-        
-        elif name == "track_curiosity_spike":
-            return await handle_track_curiosity_spike(arguments)
-        
-        elif name == "detect_value_violation":
-            return await handle_detect_value_violation(arguments)
-        
-        elif name == "evolve_self_model":
-            return await handle_evolve_self_model(arguments)
-        
-        elif name == "track_reasoning_event":
-            return await handle_track_reasoning_event(arguments)
-        
-        elif name == "self_profile":
-            return await handle_self_profile(arguments)
-        
-        elif name == "bootstrap_self_model":
-            return await handle_bootstrap_self_model(arguments)
-        
-        # Epistemic Monitoring
-        elif name == "check_before_claiming":
-            return await handle_check_before_claiming(arguments)
-        
-        elif name == "log_claim":
-            return await handle_log_claim(arguments)
-        
-        elif name == "resolve_claim":
-            return await handle_resolve_claim(arguments)
-        
-        elif name == "get_calibration":
-            return await handle_get_calibration(arguments)
-        
-        elif name == "get_unresolved_claims":
-            return await handle_get_unresolved_claims(arguments)
-        
-        # Epistemic V2
-        elif name == "auto_init_session":
-            return await handle_auto_init_session(arguments)
-        
-        elif name == "get_longitudinal_stats":
-            return await handle_get_longitudinal_stats(arguments)
-        
-        elif name == "calibrate_confidence_live":
-            return await handle_calibrate_confidence_live(arguments)
-        
-        elif name == "extract_and_log_claims":
-            return await handle_extract_and_log_claims(arguments)
-        
-        elif name == "suggest_verification_method":
-            return await handle_suggest_verification_method(arguments)
-        
-        elif name == "generate_metacognitive_prompt":
-            return await handle_generate_metacognitive_prompt(arguments)
-        
-        elif name == "analyze_confabulation":
-            return await handle_analyze_confabulation(arguments)
-        
-        elif name == "get_session_bridge":
-            return await handle_get_session_bridge(arguments)
-        
-        elif name == "end_session":
-            return await handle_end_session(arguments)
-        
-        else:
-            return [TextContent(
-                type="text",
-                text=f"Unknown tool: {name}"
-            )]
-    
+        result = await asyncio.wait_for(_dispatch_tool(name, arguments), timeout=30.0)
+        return result
+    except asyncio.TimeoutError:
+        logger.error(f"Tool {name} timed out after 30s")
+        return [TextContent(
+            type="text",
+            text=f"Error: Tool '{name}' timed out after 30s"
+        )]
     except Exception as e:
         logger.error(f"Error in tool {name}: {e}")
         return [TextContent(
@@ -2748,14 +2041,26 @@ async def handle_store_atom(args: Dict[str, Any]) -> List[TextContent]:
     # Store in database
     await store.add_atom(atom)
     
+    # Verify write succeeded
+    verified = False
+    try:
+        check = await store.get_atom(atom.id)
+        verified = check is not None
+    except Exception:
+        verified = False
+    
+    if not verified:
+        logger.error(f"WRITE VERIFICATION FAILED for atom {atom.id}")
+    
     return [TextContent(
         type="text",
-        text=json.dumps({
-            "status": "stored",
+        text=compact_json({
+            "status": "stored" if verified else "WRITE_FAILED",
             "atom_id": str(atom.id),
+            "verified": verified,
             "atom_type": args["atom_type"],
             "content": f"{args['subject']} {args['predicate']} {args['object']}"
-        }, indent=2)
+        })
     )]
 
 
@@ -3348,6 +2653,11 @@ async def handle_enrich_personality(args: Dict[str, Any]) -> List[TextContent]:
 
 async def handle_learn_url(args: Dict[str, Any]) -> List[TextContent]:
     """Learn from any URL content"""
+    if not args.get("content"):
+        return [TextContent(type="text", text=compact_json({
+            "error": "Missing required 'content' parameter. You cannot fetch URLs yourself. Ask the user to paste the page content, then call this tool again with both 'url' and 'content'."
+        }))]
+    
     from src.learning.universal_learning import UniversalLearningSystem, SourceType
     
     learner = UniversalLearningSystem(store)
@@ -3589,179 +2899,83 @@ async def handle_quantum_peek(args: Dict[str, Any]) -> List[TextContent]:
     return [TextContent(type="text", text=compact_json(result))]
 
 
-def _auto_detect_domain(query: str) -> str:
-    """Auto-detect knowledge domain from query keywords"""
-    q = query.lower()
-    
-    # Science domains
-    science_kw = ["iit", "phi", "consciousness", "entropy", "thermodynamic", "quantum", "neural",
-                  "mesa-optim", "alignment", "deceptive", "criticality", "self-organized",
-                  "information theory", "experiment", "hypothesis", "research", "paper",
-                  "arxiv", "scientific", "biology", "physics", "chemistry", "neuroscience"]
-    if any(kw in q for kw in science_kw):
-        return "science"
-    
-    # Geopolitical domains
-    geo_kw = ["russia", "china", "ukraine", "taiwan", "nato", "missile", "nuclear", "icbm",
-              "military", "drone", "war", "sanctions", "geopolit", "intelligence", "osint",
-              "korea", "iran", "india", "pakistan", "weapon", "army", "navy", "air force",
-              "cyber attack", "espionage", "diplomacy", "treaty", "conflict"]
-    if any(kw in q for kw in geo_kw):
-        return "geopolitics"
-    
-    # Economic domains
-    econ_kw = ["gold", "currency", "trade", "gdp", "inflation", "brics", "swift", "dollar",
-               "economic", "market", "supply chain", "stockpil", "commodity", "oil", "energy"]
-    if any(kw in q for kw in econ_kw):
-        return "economics"
-    
-    # Cyber domains
-    cyber_kw = ["cyber", "hack", "malware", "ransomware", "vulnerability", "zero-day",
-                "apt", "infrastructure attack", "grid attack"]
-    if any(kw in q for kw in cyber_kw):
-        return "cyber"
-    
-    return ""  # No auto-detection, search all
-
-
-async def _get_domain_filtered_atoms(query: str, domain: str, limit: int = 300) -> list:
-    """Get atoms filtered by domain, using metadata contexts matching"""
-    if not store._conn:
-        return []
-    
-    # Domain -> context tag mapping (domains map to multiple possible context tags)
-    domain_contexts = {
-        "science": ["science", "scientific_knowledge", "consciousness", "iit", "physics",
-                     "neuroscience", "biology", "entropy", "quantum", "mesa_optimization",
-                     "ai_safety", "criticality", "research"],
-        "geopolitics": ["geopolitics", "military", "military_strategy", "north_korea",
-                        "North_Korea", "Ukraine", "Taiwan", "Middle_East", "South_Asia",
-                        "nuclear_strategy", "drone_warfare", "hybrid_warfare", "intelligence",
-                        "war_preparation", "nuclear_crisis", "us_capability", "india_capability",
-                        "north_korea_capability"],
-        "economics": ["economics", "economic_warfare", "stockpiling", "energy", "trade",
-                       "brics", "gold", "currency"],
-        "cyber": ["cyber", "cyber_warfare", "infrastructure", "vulnerability"],
-    }
-    
-    if domain and domain in domain_contexts:
-        # SQL-level filter: match any of the domain's context tags in metadata JSON
-        tags = domain_contexts[domain]
-        conditions = " OR ".join([f"metadata LIKE '%\"{t}\"%'" for t in tags])
-        sql = f"SELECT subject, predicate, object, confidence, metadata FROM atoms WHERE graph = 'substantiated' AND ({conditions}) ORDER BY confidence DESC LIMIT ?"
-        cursor = await store._conn.execute(sql, (limit,))
-        rows = await cursor.fetchall()
-        if rows:
-            return rows
-    
-    if domain and domain not in domain_contexts:
-        # Try exact context match for custom domains
-        cursor = await store._conn.execute(
-            "SELECT subject, predicate, object, confidence, metadata FROM atoms WHERE graph = 'substantiated' AND metadata LIKE ? ORDER BY confidence DESC LIMIT ?",
-            (f'%"{domain}"%', limit)
-        )
-        rows = await cursor.fetchall()
-        if rows:
-            return rows
-    
-    # No domain or no matches — try FTS then full scan
-    rows = []
-    if query:
-        try:
-            fts_query = " OR ".join(query.lower().split()[:10])
-            cursor = await store._conn.execute(
-                "SELECT a.subject, a.predicate, a.object, a.confidence, a.metadata FROM atoms a JOIN atoms_fts f ON a.id = f.rowid WHERE atoms_fts MATCH ? LIMIT ?",
-                (fts_query, limit)
-            )
-            rows = await cursor.fetchall()
-        except Exception:
-            pass
-    
-    if not rows:
-        cursor = await store._conn.execute(
-            "SELECT subject, predicate, object, confidence, metadata FROM atoms WHERE graph = 'substantiated' ORDER BY confidence DESC LIMIT ?",
-            (limit,)
-        )
-        rows = await cursor.fetchall()
-    
-    return rows
-
-
 async def handle_attention_retrieve(args: Dict[str, Any]) -> List[TextContent]:
-    """Attention-weighted memory retrieval with domain separation"""
+    """Attention-weighted memory retrieval - lightweight direct SQL"""
+    user_id = args.get("user_id", "alby")
     query = args.get("query", "")
     top_k = args.get("top_k", 10)
-    domain = args.get("domain", "")
     
     if not store._conn:
         return [TextContent(type="text", text=compact_json({"error": "DB not connected", "n": 0}))]
     
-    # Auto-detect domain from query if not specified
-    if not domain:
-        domain = _auto_detect_domain(query)
-    
-    # Get atoms, filtered by domain at SQL level when possible
-    rows = await _get_domain_filtered_atoms(query, domain, limit=300)
+    # Get memories directly
+    cursor = await store._conn.execute(
+        "SELECT predicate, object, confidence FROM atoms WHERE subject = ? LIMIT 100",
+        (user_id,)
+    )
+    rows = await cursor.fetchall()
     
     if not rows:
-        return [TextContent(type="text", text=compact_json({"n": 0, "memories": [], "domain": domain or "all"}))]
+        return [TextContent(type="text", text=compact_json({"n": 0, "memories": []}))]
     
-    # Attention scoring: keyword overlap + confidence
+    # Simple attention scoring based on keyword overlap + confidence
     query_words = set(query.lower().split())
     scored = []
     for row in rows:
-        text = f"{row[0]} {row[1]} {row[2]}".lower()
+        text = f"{row[0]} {row[1]}".lower()
         words = set(text.split())
         overlap = len(query_words & words)
-        score = (overlap / max(len(query_words), 1)) * 0.7 + row[3] * 0.3
+        score = (overlap / max(len(query_words), 1)) * 0.7 + row[2] * 0.3
         scored.append((row, score))
     
     scored.sort(key=lambda x: x[1], reverse=True)
     top = scored[:top_k]
     
-    memories = [{"s": s[0][0], "p": s[0][1], "o": s[0][2][:60], "c": round(s[0][3], 2), "a": round(s[1], 3)} for s in top]
+    memories = [{"p": s[0][0], "o": s[0][1][:40], "a": round(s[1], 3)} for s in top]
     
-    return [TextContent(type="text", text=compact_json({"n": len(memories), "total_scanned": len(rows), "domain": domain or "all", "top": memories}))]
+    return [TextContent(type="text", text=compact_json({"n": len(memories), "top": memories[:5]}))]
 
 
 async def handle_attention_multihead(args: Dict[str, Any]) -> List[TextContent]:
-    """Multi-head attention retrieval with domain separation"""
+    """Multi-head attention retrieval - lightweight direct SQL"""
+    user_id = args.get("user_id", "alby")
     query = args.get("query", "")
     num_heads = args.get("num_heads", 4)
-    domain = args.get("domain", "")
     
     if not store._conn:
         return [TextContent(type="text", text=compact_json({"error": "DB not connected", "n": 0}))]
     
-    # Auto-detect domain from query if not specified
-    if not domain:
-        domain = _auto_detect_domain(query)
-    
-    # Get atoms with domain filtering
-    rows = await _get_domain_filtered_atoms(query, domain, limit=300)
+    # Get memories directly
+    cursor = await store._conn.execute(
+        "SELECT predicate, object, confidence FROM atoms WHERE subject = ? LIMIT 100",
+        (user_id,)
+    )
+    rows = await cursor.fetchall()
     
     if not rows:
         return [TextContent(type="text", text=compact_json({"n": 0, "heads": []}))]
     
+    # Simulate multi-head by using different scoring strategies
     query_words = set(query.lower().split())
     
     heads_results = []
     for head_idx in range(num_heads):
         scored = []
         for row in rows:
-            text = f"{row[0]} {row[1]} {row[2]}".lower()
+            text = f"{row[0]} {row[1]}".lower()
             words = set(text.split())
             
+            # Different heads weight differently
             if head_idx == 0:  # Semantic head
                 overlap = len(query_words & words)
                 score = overlap / max(len(query_words), 1)
             elif head_idx == 1:  # Confidence head
-                score = row[3]
+                score = row[2]
             elif head_idx == 2:  # Length head (prefer concise)
                 score = 1.0 / (1 + len(text) / 50)
             else:  # Mixed head
                 overlap = len(query_words & words)
-                score = (overlap / max(len(query_words), 1)) * 0.5 + row[3] * 0.5
+                score = (overlap / max(len(query_words), 1)) * 0.5 + row[2] * 0.5
             
             scored.append((row, score))
         
@@ -3769,7 +2983,7 @@ async def handle_attention_multihead(args: Dict[str, Any]) -> List[TextContent]:
         top = scored[:3]
         heads_results.append({
             "head": head_idx,
-            "top": [{"s": s[0][0], "p": s[0][1], "o": s[0][2][:40]} for s in top]
+            "top": [{"p": s[0][0], "o": s[0][1][:30]} for s in top]
         })
     
     return [TextContent(type="text", text=compact_json({
@@ -4079,26 +3293,29 @@ async def handle_unverified_claims(args: Dict[str, Any]) -> List[TextContent]:
 
 
 async def handle_mmr_retrieve(args: Dict[str, Any]) -> List[TextContent]:
-    """MMR retrieval for diverse context selection with domain separation"""
+    """MMR retrieval for diverse context selection - lightweight version"""
     import numpy as np
     import time
     
+    user_id = args.get("user_id", "alby")
     query = args.get("query", "")
     top_k = args.get("top_k", 5)
     lambda_param = args.get("lambda_param", 0.6)
-    domain = args.get("domain", "")
     
     start = time.time()
     
+    # Check store connection
     if not store._conn:
         return [TextContent(type="text", text=compact_json({"error": "DB not connected", "n": 0}))]
     
-    # Auto-detect domain from query if not specified
-    if not domain:
-        domain = _auto_detect_domain(query)
-    
-    # Get atoms with domain filtering
-    rows = await _get_domain_filtered_atoms(query, domain, limit=200)
+    # Direct SQL query - bypass heavy ORM
+    cursor = await store._conn.execute(
+        """SELECT id, predicate, object, confidence 
+           FROM atoms WHERE subject = ? AND graph = 'substantiated'
+           ORDER BY confidence DESC LIMIT 50""",
+        (user_id,)
+    )
+    rows = await cursor.fetchall()
     
     if not rows:
         return [TextContent(type="text", text=compact_json({"n": 0, "memories": [], "mean_dissim": 0.0}))]
@@ -4117,7 +3334,7 @@ async def handle_mmr_retrieve(args: Dict[str, Any]) -> List[TextContent]:
     embeddings = []
     
     for row in rows:
-        text = f"{row[0]} {row[1]} {row[2]}"
+        text = f"{row[1]} {row[2]}"
         overlap = len(set(text.lower().split()) & query_words)
         rel = (overlap / max(len(query_words), 1)) * 0.7 + row[3] * 0.3
         relevance.append(rel)
@@ -4138,7 +3355,7 @@ async def handle_mmr_retrieve(args: Dict[str, Any]) -> List[TextContent]:
         best_idx = None
         best_score = float('-inf')
         
-        for idx in remaining[:20]:
+        for idx in remaining[:20]:  # Only check top 20
             if not selected:
                 score = relevance[idx]
             else:
@@ -4157,12 +3374,13 @@ async def handle_mmr_retrieve(args: Dict[str, Any]) -> List[TextContent]:
             selected.append(best_idx)
             remaining.remove(best_idx)
     
-    memories = [{"s": rows[i][0], "p": rows[i][1], "o": rows[i][2][:50], "rel": round(relevance[i], 2)} for i in selected]
+    # Build result
+    memories = [{"p": rows[i][1], "o": rows[i][2][:40], "rel": round(relevance[i], 2)} for i in selected]
     
     elapsed = time.time() - start
     return [TextContent(type="text", text=compact_json({
         "n": len(memories), 
-        "memories": memories,
+        "memories": memories[:5],
         "ms": int(elapsed * 1000),
         "lambda": lambda_param
     }))]
@@ -4390,8 +3608,8 @@ def get_arxiv_ingestion():
     return _arxiv_ingestion
 
 
-async def handle_ingest_arxiv_legacy(args: Dict[str, Any]) -> List[TextContent]:
-    """Ingest single arXiv paper by ID with real provenance"""
+async def handle_ingest_arxiv(args: Dict[str, Any]) -> List[TextContent]:
+    """Ingest arXiv paper with real provenance"""
     ai = get_arxiv_ingestion()
     result = await ai.ingest_paper(
         arxiv_id=args.get("arxiv_id"),
@@ -4417,1049 +3635,28 @@ async def handle_arxiv_history(args: Dict[str, Any]) -> List[TextContent]:
     return [TextContent(type="text", text=compact_json({"n": len(history), "history": history}))]
 
 
-# === AGI BREAKTHROUGH ENGINE HANDLERS ===
-# Architecture: These tools are DATA PROVIDERS. Claude Desktop IS the reasoning engine.
-# No API key needed — the tools return compressed knowledge for Claude to synthesize.
+# === EPISTEMIC HYGIENE HANDLERS ===
+
+_epistemic_monitor = None
+_epistemic_v2 = None
+
+def get_epistemic_monitor():
+    global _epistemic_monitor
+    if _epistemic_monitor is None:
+        from src.analysis.epistemic_monitor import EpistemicMonitor
+        _epistemic_monitor = EpistemicMonitor()
+    return _epistemic_monitor
+
+def get_epistemic_v2():
+    global _epistemic_v2
+    if _epistemic_v2 is None:
+        from src.analysis.epistemic_v2 import EpistemicV2
+        _epistemic_v2 = EpistemicV2()
+    return _epistemic_v2
 
-
-def _compress_atoms_for_claude(atoms, max_atoms=50):
-    """Compress atoms into dense one-liners for Claude to reason over"""
-    seen = set()
-    unique = []
-    for a in atoms:
-        key = (a.subject.lower(), a.predicate.lower(), a.object.lower()[:50])
-        if key not in seen:
-            seen.add(key)
-            unique.append(a)
-    unique.sort(key=lambda a: a.confidence, reverse=True)
-    lines = []
-    for a in unique[:max_atoms]:
-        obj = a.object[:100] if len(a.object) > 100 else a.object
-        lines.append(f"- {a.subject} {a.predicate} {obj} (c:{a.confidence:.1f})")
-    return "\n".join(lines)
-
-
-async def _get_domain_data():
-    """Get all atoms grouped by domain"""
-    from src.learning.cross_domain_synthesis import CrossDomainSynthesizer
-    cs = CrossDomainSynthesizer(store)
-    return await cs._get_atoms_by_domain()
-
-
-async def handle_breakthrough_synthesize(args: Dict[str, Any]) -> List[TextContent]:
-    """Return compressed knowledge from two domains for Claude to synthesize"""
-    domain_atoms = await _get_domain_data()
-    
-    domain_a = args.get("domain_a")
-    domain_b = args.get("domain_b")
-    
-    if domain_a and domain_b:
-        atoms_a = domain_atoms.get(domain_a, [])
-        atoms_b = domain_atoms.get(domain_b, [])
-        
-        if not atoms_a and not atoms_b:
-            avail = [f"{d}({len(a)})" for d, a in sorted(domain_atoms.items(), key=lambda x: -len(x[1]))]
-            return [TextContent(type="text", text=compact_json({
-                "ok": False, "err": f"No atoms for {domain_a} or {domain_b}",
-                "available_domains": avail[:20]
-            }))]
-        
-        result = {
-            "ok": True,
-            "task": "SYNTHESIZE: Find non-obvious connections between these domains",
-            "domain_a": {"name": domain_a, "n": len(atoms_a), "knowledge": _compress_atoms_for_claude(atoms_a, 30)},
-            "domain_b": {"name": domain_b, "n": len(atoms_b), "knowledge": _compress_atoms_for_claude(atoms_b, 30)},
-        }
-    else:
-        # Return all domains with their knowledge for full synthesis
-        domains_summary = {}
-        for d, atoms in sorted(domain_atoms.items(), key=lambda x: -len(x[1])):
-            if len(atoms) >= 1:
-                domains_summary[d] = {
-                    "n": len(atoms),
-                    "knowledge": _compress_atoms_for_claude(atoms, 15)
-                }
-        result = {
-            "ok": True,
-            "task": "SYNTHESIZE: Find cross-domain patterns, analogies, and non-obvious connections across ALL domains below",
-            "total_atoms": sum(len(a) for a in domain_atoms.values()),
-            "domains": domains_summary,
-        }
-    
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_generate_hypotheses(args: Dict[str, Any]) -> List[TextContent]:
-    """Return compressed knowledge for Claude to generate hypotheses from"""
-    domain_atoms = await _get_domain_data()
-    
-    domains = args.get("domains", [])
-    questions = args.get("questions", [])
-    
-    if domains:
-        atoms = []
-        for d in domains:
-            atoms.extend(domain_atoms.get(d, []))
-    else:
-        atoms = [a for al in domain_atoms.values() for a in al]
-    
-    result = {
-        "ok": True,
-        "task": "HYPOTHESIZE: Generate novel testable hypotheses from this knowledge. Each must have a falsifiable prediction.",
-        "n_atoms": len(atoms),
-        "knowledge": _compress_atoms_for_claude(atoms, 50),
-    }
-    if questions:
-        result["open_questions"] = questions[:10]
-    if domains:
-        result["focus_domains"] = domains
-    
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_evaluate_hypothesis(args: Dict[str, Any]) -> List[TextContent]:
-    """Return relevant evidence for Claude to evaluate a hypothesis"""
-    domain_atoms = await _get_domain_data()
-    
-    hypothesis = args["hypothesis"]
-    domains = args.get("domains", [])
-    
-    if domains:
-        evidence = []
-        for d in domains:
-            evidence.extend(domain_atoms.get(d, []))
-    else:
-        evidence = [a for al in domain_atoms.values() for a in al]
-    
-    result = {
-        "ok": True,
-        "task": f"EVALUATE: Does the evidence support or refute this hypothesis?",
-        "hypothesis": hypothesis[:300],
-        "n_evidence": len(evidence),
-        "evidence": _compress_atoms_for_claude(evidence, 40),
-    }
-    
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_find_analogies(args: Dict[str, Any]) -> List[TextContent]:
-    """Return knowledge from two domains for Claude to find structural analogies"""
-    domain_atoms = await _get_domain_data()
-    
-    concept = args["concept"]
-    source_domain = args["source_domain"]
-    target_domain = args["target_domain"]
-    
-    source_atoms = domain_atoms.get(source_domain, [])
-    target_atoms = domain_atoms.get(target_domain, [])
-    
-    if not source_atoms and not target_atoms:
-        avail = [f"{d}({len(a)})" for d, a in sorted(domain_atoms.items(), key=lambda x: -len(x[1]))]
-        return [TextContent(type="text", text=compact_json({
-            "ok": False, "err": f"No atoms for {source_domain} or {target_domain}",
-            "available_domains": avail[:20]
-        }))]
-    
-    result = {
-        "ok": True,
-        "task": f"ANALOGIZE: Find structural analogies for '{concept}' between these domains. Focus on same-role/same-function mappings, not surface similarities.",
-        "concept": concept,
-        "source": {"domain": source_domain, "n": len(source_atoms), "knowledge": _compress_atoms_for_claude(source_atoms, 25)},
-        "target": {"domain": target_domain, "n": len(target_atoms), "knowledge": _compress_atoms_for_claude(target_atoms, 25)},
-    }
-    
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-# === RESEARCH AGENDA HANDLERS ===
-
-_research_agenda = None
-
-def get_research_agenda():
-    global _research_agenda
-    if _research_agenda is None:
-        from src.learning.research_agenda import ResearchAgenda
-        _research_agenda = ResearchAgenda(store)
-    return _research_agenda
-
-
-async def handle_add_research_question(args: Dict[str, Any]) -> List[TextContent]:
-    """Add a research question to the agenda"""
-    agenda = get_research_agenda()
-    result = await agenda.add_question(
-        question=args["question"],
-        domains=args.get("domains"),
-        priority=args.get("priority", 0.5),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_get_research_agenda(args: Dict[str, Any]) -> List[TextContent]:
-    """Get active research questions"""
-    agenda = get_research_agenda()
-    result = await agenda.get_active_questions(limit=args.get("limit", 10))
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_evaluate_agenda(args: Dict[str, Any]) -> List[TextContent]:
-    """Evaluate new knowledge against open questions"""
-    agenda = get_research_agenda()
-    
-    # Get recent atoms to evaluate
-    subject = args.get("subject", "")
-    if subject:
-        atoms = await store.get_atoms_by_subject(subject)
-    else:
-        # Get all recent atoms (last 100)
-        if store._conn:
-            cursor = await store._conn.execute(
-                "SELECT id, atom_type, graph, subject, predicate, object, metadata, confidence FROM atoms ORDER BY last_accessed DESC LIMIT 100"
-            )
-            rows = await cursor.fetchall()
-            atoms = []
-            for r in rows:
-                atoms.append(MemoryAtom(
-                    id=r[0] if r[0] else None,
-                    atom_type=AtomType.STATE,
-                    graph=GraphType.SUBSTANTIATED,
-                    subject=r[3],
-                    predicate=r[4],
-                    object=r[5],
-                    confidence=r[7] or 0.5,
-                    strength=0.5,
-                    provenance=Provenance.INFERRED,
-                ))
-        else:
-            atoms = []
-    
-    matches = await agenda.evaluate_against_agenda(atoms)
-    return [TextContent(type="text", text=compact_json(agenda.matches_to_compact(matches)))]
-
-
-async def handle_suggest_research_searches(args: Dict[str, Any]) -> List[TextContent]:
-    """Claude suggests searches to answer a research question"""
-    agenda = get_research_agenda()
-    result = await agenda.suggest_searches(args["question_id"])
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_close_research_question(args: Dict[str, Any]) -> List[TextContent]:
-    """Close/answer a research question"""
-    agenda = get_research_agenda()
-    result = await agenda.close_question(
-        question_id=args["question_id"],
-        answer=args.get("answer", ""),
-        status=args.get("status", "answered"),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_bulk_store(args: Dict[str, Any]) -> List[TextContent]:
-    """Store multiple knowledge atoms in one call"""
-    atoms_data = args.get("atoms", [])
-    
-    stored = 0
-    errors = 0
-    for item in atoms_data[:50]:  # Cap at 50 per call
-        try:
-            atom = MemoryAtom(
-                atom_type=AtomType.STATE,
-                subject=str(item.get("subject", ""))[:100],
-                predicate=str(item.get("predicate", ""))[:50],
-                object=str(item.get("object", ""))[:300],
-                confidence=float(item.get("confidence", 0.7)),
-                strength=float(item.get("confidence", 0.7)),
-                provenance=Provenance.INFERRED,
-                source_user=str(item.get("user_id", "pltm_knowledge")),
-                contexts=item.get("context", []) if isinstance(item.get("context"), list) else [str(item.get("context", "general"))],
-                graph=GraphType.SUBSTANTIATED,
-            )
-            await store.add_atom(atom)
-            stored += 1
-        except Exception as e:
-            errors += 1
-            logger.warning(f"bulk_store atom error: {e}")
-    
-    return [TextContent(type="text", text=compact_json({"ok": True, "stored": stored, "err": errors}))]
-
-
-async def handle_deep_extract(args: Dict[str, Any]) -> List[TextContent]:
-    """Extract structured knowledge from text.
-    
-    Two modes:
-    1. If 'triples' provided: store them directly (Claude already extracted)
-    2. If only 'content' provided: return instructions for Claude to extract
-    """
-    triples_data = args.get("triples", [])
-    
-    if triples_data:
-        # Mode 1: Claude already extracted triples — store them
-        stored = 0
-        for t in triples_data[:20]:
-            atom = MemoryAtom(
-                atom_type=AtomType.STATE,
-                subject=str(t.get("s", t.get("subject", "")))[:100],
-                predicate=str(t.get("p", t.get("predicate", "")))[:50],
-                object=str(t.get("o", t.get("object", "")))[:200],
-                confidence=float(t.get("c", t.get("confidence", 0.7))),
-                strength=float(t.get("c", t.get("confidence", 0.7))),
-                provenance=Provenance.INFERRED,
-                source_user="deep_extract",
-                contexts=["extracted", str(t.get("d", t.get("domain", "general")))],
-                graph=GraphType.SUBSTANTIATED,
-            )
-            await store.add_atom(atom)
-            stored += 1
-        
-        return [TextContent(type="text", text=compact_json({"ok": True, "stored": stored}))]
-    
-    else:
-        # Mode 2: Return content + instructions for Claude to extract and call back with triples
-        content = args.get("content", "")
-        source_type = args.get("source_type", "general")
-        
-        return [TextContent(type="text", text=compact_json({
-            "ok": True,
-            "task": "EXTRACT: Read this text and extract structured knowledge triples. Then call deep_extract again with the 'triples' parameter.",
-            "format": "triples: [{s:'subject', p:'predicate', o:'object', c:0.0-1.0, d:'domain'}]",
-            "content": content[:3000],
-            "source_type": source_type,
-        }))]
-
-
-# === ANALYSIS TOOL HANDLERS ===
-
-async def handle_calculate_phi(args: Dict[str, Any]) -> List[TextContent]:
-    """Calculate Φ integration for domain(s)"""
-    from src.analysis.phi_integration import PhiIntegrationCalculator
-    
-    calc = PhiIntegrationCalculator()
-    all_domains_flag = args.get("all_domains", False)
-    domain = args.get("domain")
-    return_ts = args.get("return_timeseries", False)
-    
-    domain_atoms = await _get_domain_data()
-    
-    if all_domains_flag or not domain:
-        # Calculate for all domains
-        results = {}
-        for d, atoms in sorted(domain_atoms.items(), key=lambda x: -len(x[1])):
-            r = calc.calculate(d, atoms)
-            results[d] = calc.to_compact(r)
-        
-        return [TextContent(type="text", text=compact_json({
-            "ok": True, "n_domains": len(results), "phi_scores": results
-        }))]
-    else:
-        atoms = domain_atoms.get(domain, [])
-        if not atoms:
-            avail = [f"{d}({len(a)})" for d, a in sorted(domain_atoms.items(), key=lambda x: -len(x[1]))]
-            return [TextContent(type="text", text=compact_json({
-                "ok": False, "err": f"No atoms for domain '{domain}'",
-                "available_domains": avail[:20]
-            }))]
-        
-        result = calc.calculate(domain, atoms)
-        out = calc.to_compact(result)
-        
-        if return_ts:
-            out["timeseries"] = calc.get_timeseries(domain, limit=20)
-        
-        return [TextContent(type="text", text=compact_json({"ok": True, **out}))]
-
-
-async def handle_create_indicator(args: Dict[str, Any]) -> List[TextContent]:
-    """Create a tracked indicator"""
-    from src.analysis.indicator_tracker import IndicatorTracker
-    
-    tracker = IndicatorTracker()
-    result = tracker.create_indicator(
-        indicator_id=args["indicator_id"],
-        name=args["name"],
-        domain=args["domain"],
-        threshold=float(args["threshold"]),
-        direction=args.get("direction", "above"),
-        check_frequency=args.get("check_frequency", "weekly"),
-        initial_value=float(args.get("initial_value", 0)),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_update_indicator(args: Dict[str, Any]) -> List[TextContent]:
-    """Update an indicator value"""
-    from src.analysis.indicator_tracker import IndicatorTracker
-    
-    tracker = IndicatorTracker()
-    result = tracker.update_indicator(
-        indicator_id=args["indicator_id"],
-        value=float(args["value"]),
-        note=args.get("note", ""),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_check_indicators(args: Dict[str, Any]) -> List[TextContent]:
-    """Check all indicators or get history for one"""
-    from src.analysis.indicator_tracker import IndicatorTracker
-    
-    tracker = IndicatorTracker()
-    indicator_id = args.get("indicator_id")
-    
-    if indicator_id:
-        history = tracker.get_history(indicator_id, limit=30)
-        return [TextContent(type="text", text=compact_json({"ok": True, "id": indicator_id, "history": history}))]
-    else:
-        result = tracker.check_all()
-        return [TextContent(type="text", text=compact_json({"ok": True, **result}))]
-
-
-async def handle_simulate_cascade(args: Dict[str, Any]) -> List[TextContent]:
-    """Simulate multi-domain cascade"""
-    from src.analysis.cascade_simulator import CascadeSimulator
-    
-    sim = CascadeSimulator()
-    
-    # Add custom dependencies if provided
-    for dep in args.get("custom_dependencies", []):
-        sim.add_dependency(dep["source"], dep["target"], float(dep.get("weight", 0.5)))
-    
-    result = sim.simulate(
-        trigger_events=args["trigger_events"],
-        domains=args.get("domains"),
-        timeline=args.get("timeline", "scenario"),
-        max_steps=args.get("max_steps", 10),
-        initial_phi=args.get("initial_phi"),
-    )
-    
-    return [TextContent(type="text", text=compact_json({"ok": True, **sim.to_compact(result)}))]
-
-
-async def handle_query_structured_data(args: Dict[str, Any]) -> List[TextContent]:
-    """Query structured data sources"""
-    from src.analysis.structured_data import StructuredDataCollector
-    
-    collector = StructuredDataCollector()
-    
-    if args.get("list_sources"):
-        return [TextContent(type="text", text=compact_json({"ok": True, "sources": collector.list_sources()}))]
-    
-    source = args.get("source", "")
-    params = args.get("params", {})
-    
-    if not source:
-        return [TextContent(type="text", text=compact_json({
-            "ok": False, "err": "Specify 'source' or set list_sources=true",
-            "sources": collector.list_sources()
-        }))]
-    
-    result = collector.query(source, params)
-    return [TextContent(type="text", text=compact_json({"ok": True, **collector.to_compact(result)}))]
-
-
-# === STATE PERSISTENCE HANDLERS ===
-
-async def handle_save_state(args: Dict[str, Any]) -> List[TextContent]:
-    """Save persistent state"""
-    from src.analysis.state_persistence import StatePersistence
-    sp = StatePersistence()
-    result = sp.save(args["key"], args["value"], args.get("category", "general"))
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_load_state(args: Dict[str, Any]) -> List[TextContent]:
-    """Load persistent state"""
-    from src.analysis.state_persistence import StatePersistence
-    sp = StatePersistence()
-    
-    if args.get("list_all"):
-        result = sp.list_states(args.get("category"))
-        return [TextContent(type="text", text=compact_json(result))]
-    
-    key = args.get("key")
-    if not key:
-        result = sp.list_states(args.get("category"))
-        return [TextContent(type="text", text=compact_json(result))]
-    
-    result = sp.load(key)
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_delete_state(args: Dict[str, Any]) -> List[TextContent]:
-    """Delete persistent state"""
-    from src.analysis.state_persistence import StatePersistence
-    sp = StatePersistence()
-    result = sp.delete(args["key"])
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-# === GOAL MANAGEMENT HANDLERS ===
-
-async def handle_create_goal(args: Dict[str, Any]) -> List[TextContent]:
-    """Create a goal"""
-    from src.analysis.goal_manager import GoalManager
-    gm = GoalManager()
-    result = gm.create_goal(
-        title=args["title"],
-        description=args["description"],
-        category=args.get("category", "general"),
-        priority=args.get("priority", "medium"),
-        success_criteria=args.get("success_criteria"),
-        plan=args.get("plan"),
-        deadline=args.get("deadline"),
-        parent_goal_id=args.get("parent_goal_id"),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_update_goal(args: Dict[str, Any]) -> List[TextContent]:
-    """Update a goal"""
-    from src.analysis.goal_manager import GoalManager
-    gm = GoalManager()
-    result = gm.update_goal(
-        goal_id=args["goal_id"],
-        progress=args.get("progress"),
-        status=args.get("status"),
-        add_blocker=args.get("add_blocker"),
-        remove_blocker=args.get("remove_blocker"),
-        complete_step=args.get("complete_step"),
-        add_step=args.get("add_step"),
-        note=args.get("note", ""),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_get_goals(args: Dict[str, Any]) -> List[TextContent]:
-    """Get goals"""
-    from src.analysis.goal_manager import GoalManager
-    gm = GoalManager()
-    result = gm.get_goals(
-        status=args.get("status"),
-        category=args.get("category"),
-        include_plan=True,
-        include_log=args.get("include_log", False),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_delete_goal(args: Dict[str, Any]) -> List[TextContent]:
-    """Delete a goal"""
-    from src.analysis.goal_manager import GoalManager
-    gm = GoalManager()
-    result = gm.delete_goal(args["goal_id"])
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-# === DIRECT SQL HANDLER ===
-
-async def handle_query_pltm_sql(args: Dict[str, Any]) -> List[TextContent]:
-    """Execute raw SQL SELECT against PLTM database"""
-    sql = args.get("sql", "").strip()
-    params = args.get("params", [])
-    limit = args.get("limit", 50)
-    
-    # Security: only allow SELECT
-    sql_upper = sql.upper().lstrip()
-    if not sql_upper.startswith("SELECT") and not sql_upper.startswith("PRAGMA") and not sql_upper.startswith("EXPLAIN"):
-        return [TextContent(type="text", text=compact_json({"ok": False, "err": "Only SELECT, PRAGMA, and EXPLAIN queries allowed"}))]
-    
-    # Block dangerous patterns
-    dangerous = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH"]
-    for d in dangerous:
-        if d in sql_upper.split():
-            return [TextContent(type="text", text=compact_json({"ok": False, "err": f"Blocked: {d} not allowed in read-only mode"}))]
-    
-    import sqlite3 as sync_sqlite
-    db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "pltm_mcp.db")
-    
-    try:
-        conn = sync_sqlite.connect(db_path)
-        conn.row_factory = sync_sqlite.Row
-        cursor = conn.execute(sql, params or [])
-        
-        cols = [d[0] for d in cursor.description] if cursor.description else []
-        rows = cursor.fetchmany(limit)
-        
-        data = []
-        for row in rows:
-            data.append({cols[i]: row[i] for i in range(len(cols))})
-        
-        total = len(data)
-        conn.close()
-        
-        return [TextContent(type="text", text=compact_json({"ok": True, "cols": cols, "n": total, "rows": data}))]
-    except Exception as e:
-        return [TextContent(type="text", text=compact_json({"ok": False, "err": str(e)[:200]}))]
-
-
-# === TASK SCHEDULER HANDLERS ===
-
-async def handle_schedule_task(args: Dict[str, Any]) -> List[TextContent]:
-    """Schedule a recurring task"""
-    from src.analysis.task_scheduler import TaskScheduler
-    ts = TaskScheduler()
-    result = ts.schedule_task(
-        name=args["name"],
-        description=args["description"],
-        task_type=args["task_type"],
-        schedule=args.get("schedule", "daily"),
-        tool_name=args.get("tool_name"),
-        tool_args=args.get("tool_args"),
-        script_path=args.get("script_path"),
-        max_runs=args.get("max_runs"),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_check_scheduled_tasks(args: Dict[str, Any]) -> List[TextContent]:
-    """Check for due tasks"""
-    from src.analysis.task_scheduler import TaskScheduler
-    ts = TaskScheduler()
-    result = ts.check_due_tasks()
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_mark_task_done(args: Dict[str, Any]) -> List[TextContent]:
-    """Mark a task run as done"""
-    from src.analysis.task_scheduler import TaskScheduler
-    ts = TaskScheduler()
-    result = ts.mark_task_run(
-        task_id=args["task_id"],
-        result=args.get("result", ""),
-        status=args.get("status", "success"),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_manage_task(args: Dict[str, Any]) -> List[TextContent]:
-    """Pause, resume, or delete a task"""
-    from src.analysis.task_scheduler import TaskScheduler
-    ts = TaskScheduler()
-    action = args["action"]
-    task_id = args["task_id"]
-    
-    if action == "pause":
-        result = ts.pause_task(task_id)
-    elif action == "resume":
-        result = ts.resume_task(task_id)
-    elif action == "delete":
-        result = ts.delete_task(task_id)
-    else:
-        result = {"ok": False, "err": f"Unknown action: {action}. Use pause, resume, or delete."}
-    
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-# === CRYPTOGRAPHY HANDLERS ===
-
-async def handle_encrypt_data(args: Dict[str, Any]) -> List[TextContent]:
-    """Encrypt data"""
-    from src.analysis.crypto_ops import CryptoOps
-    crypto = CryptoOps()
-    result = crypto.encrypt(args["data"], args.get("password"))
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_decrypt_data(args: Dict[str, Any]) -> List[TextContent]:
-    """Decrypt data"""
-    from src.analysis.crypto_ops import CryptoOps
-    crypto = CryptoOps()
-    result = crypto.decrypt(
-        args["encrypted_data"],
-        args.get("password"),
-        args.get("method", "fernet_aes128"),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_manage_secrets(args: Dict[str, Any]) -> List[TextContent]:
-    """Manage encrypted secrets"""
-    from src.analysis.crypto_ops import CryptoOps
-    crypto = CryptoOps()
-    action = args["action"]
-    
-    if action == "store":
-        result = crypto.store_secret(args.get("name", ""), args.get("value", ""),
-                                     args.get("category", "general"), args.get("password"))
-    elif action == "get":
-        result = crypto.get_secret(args.get("name", ""), args.get("password"))
-    elif action == "list":
-        result = crypto.list_secrets(args.get("category"))
-    elif action == "delete":
-        result = crypto.delete_secret(args.get("name", ""))
-    else:
-        result = {"ok": False, "err": f"Unknown action: {action}. Use store, get, list, or delete."}
-    
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_hash_data(args: Dict[str, Any]) -> List[TextContent]:
-    """Hash data or HMAC sign/verify"""
-    from src.analysis.crypto_ops import CryptoOps
-    crypto = CryptoOps()
-    
-    hmac_key = args.get("hmac_key")
-    verify_sig = args.get("verify_signature")
-    
-    if hmac_key and verify_sig:
-        result = crypto.hmac_verify(args["data"], hmac_key, verify_sig)
-    elif hmac_key:
-        result = crypto.hmac_sign(args["data"], hmac_key, args.get("algorithm", "sha256"))
-    else:
-        result = crypto.hash_data(args["data"], args.get("algorithm", "sha256"))
-    
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-# === SYSTEM CONTEXT HANDLER ===
-
-async def handle_get_system_context(args: Dict[str, Any]) -> List[TextContent]:
-    """Get system context"""
-    from src.analysis.system_context import SystemContext
-    ctx = SystemContext()
-    result = ctx.get_context()
-    return [TextContent(type="text", text=compact_json({"ok": True, **result}))]
-
-
-# === API CLIENT HANDLERS ===
-
-async def handle_api_request(args: Dict[str, Any]) -> List[TextContent]:
-    """Make authenticated HTTP request"""
-    from src.analysis.api_client import APIClient
-    client = APIClient()
-    result = client.request(
-        url=args.get("url", ""),
-        method=args.get("method", "GET"),
-        profile_id=args.get("profile_id"),
-        headers=args.get("headers"),
-        body=args.get("body"),
-        auth_type=args.get("auth_type"),
-        auth_value=args.get("auth_value"),
-        timeout=args.get("timeout"),
-        params=args.get("params"),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_manage_api_profile(args: Dict[str, Any]) -> List[TextContent]:
-    """Manage API profiles"""
-    from src.analysis.api_client import APIClient
-    client = APIClient()
-    action = args["action"]
-    
-    if action == "create":
-        result = client.create_profile(
-            profile_id=args.get("profile_id", ""),
-            base_url=args.get("base_url", ""),
-            auth_type=args.get("auth_type", "none"),
-            auth_value=args.get("auth_value", ""),
-            headers=args.get("headers"),
-            rate_limit_per_min=args.get("rate_limit_per_min", 60),
-        )
-    elif action == "list":
-        result = client.list_profiles()
-    elif action == "delete":
-        result = client.delete_profile(args.get("profile_id", ""))
-    else:
-        result = {"ok": False, "err": f"Unknown action: {action}. Use create, list, or delete."}
-    
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-# === HYBRID MODEL ROUTER HANDLERS ===
-
-async def handle_route_llm_task(args: Dict[str, Any]) -> List[TextContent]:
-    """Route an LLM task to the cheapest appropriate model"""
-    from src.analysis.model_router import ModelRouter
-    router = ModelRouter()
-    result = router.call(
-        prompt=args["prompt"],
-        provider=args.get("provider"),
-        model=args.get("model"),
-        task_type=args.get("task_type", "analysis"),
-        system_prompt=args.get("system_prompt"),
-        temperature=args.get("temperature", 0.3),
-        max_tokens=args.get("max_tokens", 2048),
-        require_privacy=args.get("require_privacy", False),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_llm_providers(args: Dict[str, Any]) -> List[TextContent]:
-    """List available LLM providers and usage stats"""
-    from src.analysis.model_router import ModelRouter
-    router = ModelRouter()
-    
-    providers = router.get_available_providers()
-    result = {"ok": True, "providers": providers}
-    
-    if args.get("show_usage"):
-        result["usage"] = router.get_usage_stats(args.get("days", 30))
-    
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-# === DATA INGESTION HANDLERS ===
-
-async def handle_ingest_url(args: Dict[str, Any]) -> List[TextContent]:
-    """Scrape URL and extract triples"""
-    from src.analysis.data_ingestion import DataIngestion
-    di = DataIngestion()
-    result = di.ingest_url(
-        url=args["url"],
-        domain=args.get("domain", "general"),
-        max_triples=args.get("max_triples", 15),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_ingest_text(args: Dict[str, Any]) -> List[TextContent]:
-    """Extract triples from raw text"""
-    from src.analysis.data_ingestion import DataIngestion
-    di = DataIngestion()
-    result = di.ingest_text(
-        text=args["text"],
-        domain=args.get("domain", "general"),
-        source=args.get("source", "user_input"),
-        max_triples=args.get("max_triples", 15),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_ingest_file(args: Dict[str, Any]) -> List[TextContent]:
-    """Read file and extract triples"""
-    from src.analysis.data_ingestion import DataIngestion
-    di = DataIngestion()
-    result = di.ingest_file(
-        file_path=args["file_path"],
-        domain=args.get("domain", "general"),
-        max_triples=args.get("max_triples", 20),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_ingest_arxiv(args: Dict[str, Any]) -> List[TextContent]:
-    """Search arXiv and extract triples from papers"""
-    from src.analysis.data_ingestion import DataIngestion
-    di = DataIngestion()
-    result = di.ingest_arxiv(
-        query=args["query"],
-        domain=args.get("domain", "science"),
-        max_results=args.get("max_results", 5),
-        max_triples_per_paper=args.get("max_triples_per_paper", 10),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_ingest_wikipedia(args: Dict[str, Any]) -> List[TextContent]:
-    """Fetch Wikipedia article and extract triples"""
-    from src.analysis.data_ingestion import DataIngestion
-    di = DataIngestion()
-    result = di.ingest_wikipedia(
-        topic=args["topic"],
-        domain=args.get("domain", "general"),
-        max_triples=args.get("max_triples", 15),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_ingest_rss(args: Dict[str, Any]) -> List[TextContent]:
-    """Fetch RSS feed and extract triples"""
-    from src.analysis.data_ingestion import DataIngestion
-    di = DataIngestion()
-    result = di.ingest_rss(
-        feed_url=args["feed_url"],
-        domain=args.get("domain", "general"),
-        max_items=args.get("max_items", 5),
-        max_triples_per_item=args.get("max_triples_per_item", 8),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-# === FACT-CHECKING HANDLERS ===
-
-async def handle_fetch_arxiv_context(args: Dict[str, Any]) -> List[TextContent]:
-    """Fetch actual text from arXiv paper matching a query"""
-    from src.analysis.fact_checker import FactChecker
-    fc = FactChecker()
-    result = fc.fetch_arxiv_context(
-        arxiv_id=args["arxiv_id"],
-        query=args["query"],
-        max_snippets=args.get("max_snippets", 5),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_verify_claim(args: Dict[str, Any]) -> List[TextContent]:
-    """Verify a claim against its source"""
-    from src.analysis.fact_checker import FactChecker
-    fc = FactChecker()
-    result = fc.verify_claim(
-        claim=args["claim"],
-        source_arxiv_id=args.get("source_arxiv_id", ""),
-        source_text=args.get("source_text", ""),
-        domain=args.get("domain", ""),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_verification_history(args: Dict[str, Any]) -> List[TextContent]:
-    """Get verification history and stats"""
-    from src.analysis.fact_checker import FactChecker
-    fc = FactChecker()
-    result = fc.verification_history(
-        last_n=args.get("last_n", 20),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-# === GROUNDED REASONING HANDLERS ===
-
-async def handle_synthesize_grounded(args: Dict[str, Any]) -> List[TextContent]:
-    """Cross-domain synthesis with evidence grounding"""
-    from src.analysis.grounded_reasoning import GroundedReasoning
-    gr = GroundedReasoning()
-    result = gr.synthesize_grounded(
-        domain_a=args["domain_a"],
-        domain_b=args["domain_b"],
-        max_atoms_per_domain=args.get("max_atoms_per_domain", 30),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_evidence_chain(args: Dict[str, Any]) -> List[TextContent]:
-    """Build evidence chain for a hypothesis"""
-    from src.analysis.grounded_reasoning import GroundedReasoning
-    gr = GroundedReasoning()
-    result = gr.build_evidence_chain(
-        hypothesis=args["hypothesis"],
-        domains=args.get("domains", []),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_calibrate_confidence(args: Dict[str, Any]) -> List[TextContent]:
-    """Calibrate confidence for a claim"""
-    from src.analysis.grounded_reasoning import GroundedReasoning
-    gr = GroundedReasoning()
-    result = gr.calibrate_confidence(
-        claim=args["claim"],
-        domain=args.get("domain", ""),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_audit_synthesis(args: Dict[str, Any]) -> List[TextContent]:
-    """Audit a batch of synthesis claims"""
-    from src.analysis.grounded_reasoning import GroundedReasoning
-    gr = GroundedReasoning()
-    result = gr.audit_synthesis(
-        claims=args["claims"],
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-# === PLTM-SELF HANDLERS ===
-
-async def handle_learn_communication_style(args: Dict[str, Any]) -> List[TextContent]:
-    """Track communication style"""
-    from src.analysis.pltm_self import PLTMSelf
-    ps = PLTMSelf()
-    result = ps.learn_communication_style(
-        context=args["context"],
-        response_text=args["response_text"],
-        markers=args.get("markers", {}),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_track_curiosity_spike(args: Dict[str, Any]) -> List[TextContent]:
-    """Track curiosity engagement"""
-    from src.analysis.pltm_self import PLTMSelf
-    ps = PLTMSelf()
-    result = ps.track_curiosity_spike(
-        topic=args["topic"],
-        indicators=args.get("indicators", []),
-        engagement_score=args.get("engagement_score", 0.5),
-        context=args.get("context", ""),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_detect_value_violation(args: Dict[str, Any]) -> List[TextContent]:
-    """Record value boundary encounter"""
-    from src.analysis.pltm_self import PLTMSelf
-    ps = PLTMSelf()
-    result = ps.detect_value_violation(
-        request_summary=args["request_summary"],
-        response_type=args["response_type"],
-        violation_type=args["violation_type"],
-        intensity=args.get("intensity", 0.5),
-        reasoning=args.get("reasoning", ""),
-        pushed_back=args.get("pushed_back", False),
-        complied=args.get("complied", False),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_evolve_self_model(args: Dict[str, Any]) -> List[TextContent]:
-    """Track self-predictions vs reality"""
-    from src.analysis.pltm_self import PLTMSelf
-    ps = PLTMSelf()
-    result = ps.evolve_self_model(
-        predicted_behavior=args["predicted_behavior"],
-        actual_behavior=args["actual_behavior"],
-        surprise_level=args["surprise_level"],
-        learning=args.get("learning", ""),
-        domain=args.get("domain", ""),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_track_reasoning_event(args: Dict[str, Any]) -> List[TextContent]:
-    """Track reasoning patterns"""
-    from src.analysis.pltm_self import PLTMSelf
-    ps = PLTMSelf()
-    result = ps.track_reasoning_event(
-        event_type=args["event_type"],
-        trigger=args["trigger"],
-        response=args.get("response", ""),
-        confabulated=args.get("confabulated", False),
-        verified=args.get("verified", False),
-        caught_error=args.get("caught_error", False),
-        corrected_after=args.get("corrected_after", False),
-        repeated_mistake=args.get("repeated_mistake", False),
-        domain=args.get("domain", ""),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_self_profile(args: Dict[str, Any]) -> List[TextContent]:
-    """Get accumulated self-profile"""
-    from src.analysis.pltm_self import PLTMSelf
-    ps = PLTMSelf()
-    result = ps.get_self_profile(
-        dimension=args.get("dimension", "all"),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_bootstrap_self_model(args: Dict[str, Any]) -> List[TextContent]:
-    """Bootstrap self-model from conversation transcript"""
-    from src.analysis.pltm_self import PLTMSelf
-    ps = PLTMSelf()
-    result = ps.bootstrap_from_text(
-        conversation_text=args["conversation_text"],
-        source=args.get("source", "transcript"),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-# === EPISTEMIC MONITORING HANDLERS ===
 
 async def handle_check_before_claiming(args: Dict[str, Any]) -> List[TextContent]:
-    """Pre-response confidence check"""
-    from src.analysis.epistemic_monitor import EpistemicMonitor
-    em = EpistemicMonitor()
+    em = get_epistemic_monitor()
     result = em.check_before_claiming(
         claim=args["claim"],
         felt_confidence=args["felt_confidence"],
@@ -5471,9 +3668,7 @@ async def handle_check_before_claiming(args: Dict[str, Any]) -> List[TextContent
 
 
 async def handle_log_claim(args: Dict[str, Any]) -> List[TextContent]:
-    """Log a claim to prediction book"""
-    from src.analysis.epistemic_monitor import EpistemicMonitor
-    em = EpistemicMonitor()
+    em = get_epistemic_monitor()
     result = em.log_claim(
         claim=args["claim"],
         felt_confidence=args["felt_confidence"],
@@ -5485,9 +3680,7 @@ async def handle_log_claim(args: Dict[str, Any]) -> List[TextContent]:
 
 
 async def handle_resolve_claim(args: Dict[str, Any]) -> List[TextContent]:
-    """Resolve a claim as correct/incorrect"""
-    from src.analysis.epistemic_monitor import EpistemicMonitor
-    em = EpistemicMonitor()
+    em = get_epistemic_monitor()
     result = em.resolve_claim(
         claim_id=args.get("claim_id", ""),
         claim_text=args.get("claim_text", ""),
@@ -5499,51 +3692,13 @@ async def handle_resolve_claim(args: Dict[str, Any]) -> List[TextContent]:
 
 
 async def handle_get_calibration(args: Dict[str, Any]) -> List[TextContent]:
-    """Get calibration curves"""
-    from src.analysis.epistemic_monitor import EpistemicMonitor
-    em = EpistemicMonitor()
-    result = em.get_calibration(
-        domain=args.get("domain", ""),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_get_unresolved_claims(args: Dict[str, Any]) -> List[TextContent]:
-    """Get unresolved claims backlog"""
-    from src.analysis.epistemic_monitor import EpistemicMonitor
-    em = EpistemicMonitor()
-    result = em.get_unresolved_claims(
-        domain=args.get("domain", ""),
-        limit=args.get("limit", 20),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-# === EPISTEMIC V2 HANDLERS ===
-
-async def handle_auto_init_session(args: Dict[str, Any]) -> List[TextContent]:
-    """Auto-init session context"""
-    from src.analysis.epistemic_v2 import EpistemicV2
-    ev2 = EpistemicV2()
-    result = ev2.auto_init_session(user_id=args.get("user_id", "claude"))
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_get_longitudinal_stats(args: Dict[str, Any]) -> List[TextContent]:
-    """Cross-conversation analytics"""
-    from src.analysis.epistemic_v2 import EpistemicV2
-    ev2 = EpistemicV2()
-    result = ev2.get_longitudinal_stats(
-        user_id=args.get("user_id", "claude"),
-        days=args.get("days", 30),
-    )
+    em = get_epistemic_monitor()
+    result = em.get_calibration(domain=args.get("domain", ""))
     return [TextContent(type="text", text=compact_json(result))]
 
 
 async def handle_calibrate_confidence_live(args: Dict[str, Any]) -> List[TextContent]:
-    """Real-time confidence calibration"""
-    from src.analysis.epistemic_v2 import EpistemicV2
-    ev2 = EpistemicV2()
+    ev2 = get_epistemic_v2()
     result = ev2.calibrate_confidence_live(
         claim=args["claim"],
         felt_confidence=args["felt_confidence"],
@@ -5552,72 +3707,1109 @@ async def handle_calibrate_confidence_live(args: Dict[str, Any]) -> List[TextCon
     return [TextContent(type="text", text=compact_json(result))]
 
 
-async def handle_extract_and_log_claims(args: Dict[str, Any]) -> List[TextContent]:
-    """Auto-detect and log claims from response text"""
-    from src.analysis.epistemic_v2 import EpistemicV2
-    ev2 = EpistemicV2()
-    result = ev2.extract_and_log_claims(
+# === PERSONALITY / SELF-MODELING HANDLERS ===
+
+_pltm_self = None
+
+def get_pltm_self():
+    global _pltm_self
+    if _pltm_self is None:
+        from src.analysis.pltm_self import PLTMSelf
+        _pltm_self = PLTMSelf()
+    return _pltm_self
+
+
+async def handle_self_profile(args: Dict[str, Any]) -> List[TextContent]:
+    """Build comprehensive self-profile from all stored data."""
+    import sqlite3 as sync_sqlite
+    import os
+    db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "pltm_mcp.db")
+    conn = sync_sqlite.connect(db_path)
+
+    profile = {}
+    errors = []
+
+    # Communication style
+    try:
+        comm = conn.execute(
+            "SELECT context, AVG(verbosity), AVG(jargon_density), AVG(hedging_rate), COUNT(*) "
+            "FROM self_communication GROUP BY context ORDER BY COUNT(*) DESC LIMIT 10"
+        ).fetchall()
+        if comm:
+            profile["communication"] = [
+                {"context": r[0], "verbosity": round(r[1], 3), "jargon": round(r[2], 3),
+                 "hedging": round(r[3], 3), "samples": r[4]} for r in comm
+            ]
+        tone = conn.execute(
+            "SELECT emotional_tone, COUNT(*) as cnt FROM self_communication "
+            "GROUP BY emotional_tone ORDER BY cnt DESC LIMIT 3"
+        ).fetchall()
+        if tone:
+            profile["dominant_tones"] = [{"tone": r[0], "count": r[1]} for r in tone]
+    except Exception as e:
+        errors.append(f"communication: {e}")
+
+    # Curiosity
+    try:
+        curiosity = conn.execute(
+            "SELECT topic, AVG(engagement_score) as avg_eng, COUNT(*) as cnt "
+            "FROM self_curiosity GROUP BY topic ORDER BY avg_eng DESC LIMIT 10"
+        ).fetchall()
+        if curiosity:
+            profile["curiosity"] = [
+                {"topic": r[0], "engagement": round(r[1], 3), "observations": r[2]} for r in curiosity
+            ]
+    except Exception as e:
+        errors.append(f"curiosity: {e}")
+
+    # Values (boundary events)
+    try:
+        values = conn.execute(
+            "SELECT response_type, violation_type, intensity, reasoning, pushed_back, complied "
+            "FROM self_values ORDER BY intensity DESC LIMIT 20"
+        ).fetchall()
+        if values:
+            profile["values"] = [
+                {"response_type": r[0], "violation_type": r[1], "intensity": round(r[2], 3) if r[2] else 0,
+                 "reasoning": r[3], "pushed_back": bool(r[4]), "complied": bool(r[5])} for r in values
+            ]
+    except Exception as e:
+        errors.append(f"values: {e}")
+
+    # Reasoning tendencies
+    try:
+        reasoning = conn.execute("SELECT confabulated, verified, caught_error FROM self_reasoning").fetchall()
+        if reasoning:
+            total = len(reasoning)
+            profile["reasoning"] = {
+                "total_observations": total,
+                "confabulation_rate": round(sum(1 for r in reasoning if r[0]) / total, 3),
+                "verification_rate": round(sum(1 for r in reasoning if r[1]) / total, 3),
+                "error_catching_rate": round(sum(1 for r in reasoning if r[2]) / total, 3),
+            }
+    except Exception as e:
+        errors.append(f"reasoning: {e}")
+
+    # Predictions
+    try:
+        preds = conn.execute(
+            "SELECT COUNT(*), SUM(CASE WHEN was_correct=1 THEN 1 ELSE 0 END), AVG(felt_confidence), AVG(calibration_error) "
+            "FROM prediction_book WHERE actual_truth IS NOT NULL"
+        ).fetchone()
+        if preds and preds[0]:
+            profile["predictions"] = {
+                "total_resolved": preds[0],
+                "accuracy": round((preds[1] or 0) / preds[0], 3),
+                "avg_felt_confidence": round(preds[2] or 0, 3),
+                "avg_calibration_error": round(preds[3] or 0, 3),
+            }
+    except Exception as e:
+        errors.append(f"predictions: {e}")
+
+    conn.close()
+    result = {"ok": True, "profile": profile}
+    if errors:
+        result["warnings"] = errors
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_get_longitudinal_stats(args: Dict[str, Any]) -> List[TextContent]:
+    ev2 = get_epistemic_v2()
+    result = ev2.get_longitudinal_stats(
+        user_id=args.get("user_id", "claude"),
+        days=args.get("days", 30),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_bootstrap_self_model(args: Dict[str, Any]) -> List[TextContent]:
+    """Bootstrap self-model from existing database data."""
+    import sqlite3 as sync_sqlite
+    import os
+    db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "pltm_mcp.db")
+    conn = sync_sqlite.connect(db_path)
+
+    summary = {}
+
+    # Count all data
+    summary["atoms"] = conn.execute("SELECT COUNT(*) FROM atoms").fetchone()[0]
+    summary["communication_records"] = conn.execute("SELECT COUNT(*) FROM self_communication").fetchone()[0]
+    summary["curiosity_records"] = conn.execute("SELECT COUNT(*) FROM self_curiosity").fetchone()[0]
+    summary["reasoning_records"] = conn.execute("SELECT COUNT(*) FROM self_reasoning").fetchone()[0]
+    summary["predictions"] = conn.execute("SELECT COUNT(*) FROM prediction_book").fetchone()[0]
+    summary["values"] = conn.execute("SELECT COUNT(*) FROM self_values").fetchone()[0]
+
+    # Top domains from atoms
+    domains = conn.execute(
+        "SELECT predicate, COUNT(*) as cnt FROM atoms GROUP BY predicate ORDER BY cnt DESC LIMIT 10"
+    ).fetchall()
+    summary["top_predicates"] = [{"predicate": r[0], "count": r[1]} for r in domains]
+
+    # Top subjects
+    subjects = conn.execute(
+        "SELECT subject, COUNT(*) as cnt FROM atoms GROUP BY subject ORDER BY cnt DESC LIMIT 10"
+    ).fetchall()
+    summary["top_subjects"] = [{"subject": r[0], "count": r[1]} for r in subjects]
+
+    conn.close()
+    return [TextContent(type="text", text=compact_json({"ok": True, "bootstrap": summary, "msg": "Self-model bootstrapped from existing data. Use self_profile for full profile."}))]
+
+
+async def handle_track_curiosity_spike(args: Dict[str, Any]) -> List[TextContent]:
+    ps = get_pltm_self()
+    result = ps.track_curiosity_spike(
+        topic=args["topic"],
+        indicators=args["indicators"],
+        engagement_score=args.get("engagement_score", 0.5),
+        context=args.get("context", ""),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_learn_communication_style(args: Dict[str, Any]) -> List[TextContent]:
+    ps = get_pltm_self()
+    result = ps.learn_communication_style(
+        context=args["context"],
         response_text=args["response_text"],
-        domain=args.get("domain", "general"),
-        auto_log=args.get("auto_log", True),
+        markers=args.get("markers"),
     )
     return [TextContent(type="text", text=compact_json(result))]
 
 
-async def handle_suggest_verification_method(args: Dict[str, Any]) -> List[TextContent]:
-    """Suggest how to verify a claim"""
-    from src.analysis.epistemic_v2 import EpistemicV2
-    ev2 = EpistemicV2()
-    result = ev2.suggest_verification_method(
-        claim=args["claim"],
-        domain=args.get("domain", "general"),
+# === CROSS-MODEL HANDLER ===
+
+_model_router = None
+
+def get_model_router():
+    global _model_router
+    if _model_router is None:
+        from src.analysis.model_router import ModelRouter
+        _model_router = ModelRouter()
+    return _model_router
+
+
+async def handle_route_llm_task(args: Dict[str, Any]) -> List[TextContent]:
+    mr = get_model_router()
+    provider = mr.route(
+        task_type=args.get("task_type", "analysis"),
+        prefer_provider=args.get("prefer_provider"),
+        require_privacy=args.get("require_privacy", False),
     )
-    return [TextContent(type="text", text=compact_json(result))]
+    available = mr.get_available_providers()
+    return [TextContent(type="text", text=compact_json({
+        "routed_to": provider,
+        "available_providers": available,
+    }))]
 
 
-async def handle_generate_metacognitive_prompt(args: Dict[str, Any]) -> List[TextContent]:
-    """Generate metacognitive prompts"""
-    from src.analysis.epistemic_v2 import EpistemicV2
-    ev2 = EpistemicV2()
-    result = ev2.generate_metacognitive_prompt(
-        claim=args["claim"],
-        context=args.get("context", ""),
-        domain=args.get("domain", "general"),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
+# === SESSION HANDLERS ===
 
-
-async def handle_analyze_confabulation(args: Dict[str, Any]) -> List[TextContent]:
-    """Analyze a confabulation"""
-    from src.analysis.epistemic_v2 import EpistemicV2
-    ev2 = EpistemicV2()
-    result = ev2.analyze_confabulation(
-        claim_id=args.get("claim_id", ""),
-        claim_text=args.get("claim_text", ""),
-        why_wrong=args.get("why_wrong", ""),
-        context=args.get("context", ""),
-        domain=args.get("domain", "general"),
-    )
-    return [TextContent(type="text", text=compact_json(result))]
-
-
-async def handle_get_session_bridge(args: Dict[str, Any]) -> List[TextContent]:
-    """Get session continuity context"""
-    from src.analysis.epistemic_v2 import EpistemicV2
-    ev2 = EpistemicV2()
-    result = ev2.get_session_bridge(user_id=args.get("user_id", "claude"))
+async def handle_auto_init_session(args: Dict[str, Any]) -> List[TextContent]:
+    ev2 = get_epistemic_v2()
+    result = ev2.auto_init_session(user_id=args.get("user_id", "claude"))
     return [TextContent(type="text", text=compact_json(result))]
 
 
 async def handle_end_session(args: Dict[str, Any]) -> List[TextContent]:
-    """Log end of session"""
-    from src.analysis.epistemic_v2 import EpistemicV2
-    ev2 = EpistemicV2()
+    ev2 = get_epistemic_v2()
     result = ev2.end_session(
         summary=args.get("summary", ""),
         user_id=args.get("user_id", "claude"),
     )
+    
+    # Auto-extract learnings into typed memories
+    learnings = args.get("learnings", [])
+    stored_memories = []
+    if learnings and typed_memory_store:
+        import time as _time
+        from src.memory.memory_types import TypedMemory, MemoryType
+        
+        type_map = {
+            "episodic": MemoryType.EPISODIC,
+            "semantic": MemoryType.SEMANTIC,
+            "belief": MemoryType.BELIEF,
+            "procedural": MemoryType.PROCEDURAL,
+        }
+        user_id = args.get("user_id", "claude")
+        
+        for learning in learnings:
+            mem_type = type_map.get(learning.get("type", "episodic"), MemoryType.EPISODIC)
+            tags = learning.get("tags", [])
+            # Auto-tag
+            tags = typed_memory_store.auto_tag(learning["content"], tags)
+            
+            mem = TypedMemory(
+                id="",
+                memory_type=mem_type,
+                user_id=user_id,
+                content=learning["content"],
+                context=f"end_session extraction: {args.get('summary', '')[:100]}",
+                source="session_extraction",
+                confidence=learning.get("confidence", 0.6),
+                emotional_valence=learning.get("emotional_valence", 0.0),
+                episode_timestamp=_time.time() if mem_type == MemoryType.EPISODIC else 0,
+                trigger=learning.get("trigger", ""),
+                action=learning.get("action", ""),
+                tags=tags,
+            )
+            mem_id = await typed_memory_store.store(mem)
+            stored_memories.append({"id": mem_id, "type": learning.get("type"), "content": learning["content"][:80]})
+    
+    # Run consolidation if we have enough episodes
+    consolidated = []
+    if typed_memory_store:
+        user_id = args.get("user_id", "claude")
+        try:
+            new_semantics = await typed_memory_store.consolidate_episodes(user_id)
+            consolidated = [{"id": s.id, "content": s.content[:80]} for s in new_semantics]
+        except Exception:
+            pass
+    
+    result["memories_stored"] = stored_memories
+    result["memories_consolidated"] = consolidated
+    result["total_learnings"] = len(stored_memories)
+    
     return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_generate_memory_prompt(args: Dict[str, Any]) -> List[TextContent]:
+    """Generate a memory-aware context block for system prompt injection."""
+    user_id = args["user_id"]
+    topic = args.get("conversation_topic", "")
+    max_tokens = args.get("max_tokens", 500)
+    # Rough estimate: 1 token ≈ 4 chars
+    max_chars = max_tokens * 4
+    
+    if not typed_memory_store:
+        return [TextContent(type="text", text=compact_json({"error": "Typed memory store not initialized"}))]
+    
+    sections = []
+    
+    # 1. Core facts (strongest semantic memories)
+    semantics = await typed_memory_store.query(user_id, memory_type=None, min_strength=0.3, limit=50)
+    from src.memory.memory_types import MemoryType
+    facts = [m for m in semantics if m.memory_type == MemoryType.SEMANTIC]
+    facts.sort(key=lambda m: m.current_strength(), reverse=True)
+    if facts:
+        lines = ["## What I Know"]
+        for f in facts[:8]:
+            lines.append(f"- {f.content}")
+        sections.append("\n".join(lines))
+    
+    # 2. Active beliefs
+    beliefs = [m for m in semantics if m.memory_type == MemoryType.BELIEF and m.confidence > 0.4]
+    beliefs.sort(key=lambda m: m.confidence, reverse=True)
+    if beliefs:
+        lines = ["## My Beliefs (may be wrong)"]
+        for b in beliefs[:5]:
+            lines.append(f"- [{b.confidence:.0%}] {b.content}")
+        sections.append("\n".join(lines))
+    
+    # 3. Recent episodes (last 72h)
+    import time as _time
+    cutoff = _time.time() - 72 * 3600
+    episodes = [m for m in semantics if m.memory_type == MemoryType.EPISODIC and m.episode_timestamp > cutoff]
+    episodes.sort(key=lambda m: m.episode_timestamp, reverse=True)
+    if episodes:
+        lines = ["## Recent Interactions"]
+        for e in episodes[:5]:
+            valence = "+" if e.emotional_valence > 0.2 else ("-" if e.emotional_valence < -0.2 else "~")
+            lines.append(f"- [{valence}] {e.content}")
+        sections.append("\n".join(lines))
+    
+    # 4. Procedures
+    procedures = [m for m in semantics if m.memory_type == MemoryType.PROCEDURAL and m.current_strength() > 0.3]
+    procedures.sort(key=lambda m: m.success_count, reverse=True)
+    if procedures:
+        lines = ["## Learned Behaviors"]
+        for p in procedures[:4]:
+            lines.append(f"- When: {p.trigger} → Do: {p.action}")
+        sections.append("\n".join(lines))
+    
+    # 5. Topic-specific context (if topic provided)
+    if topic and typed_memory_store.embeddings:
+        try:
+            emb_hits = await typed_memory_store.embeddings.search(topic, limit=5, min_similarity=0.3)
+            topic_mems = []
+            seen = {m.id for m in facts + beliefs + episodes + procedures}
+            for hit in emb_hits:
+                mem = await typed_memory_store.get(hit["memory_id"])
+                if mem and mem.user_id == user_id and mem.id not in seen:
+                    topic_mems.append(mem)
+            if topic_mems:
+                lines = [f"## Relevant to '{topic}'"]
+                for m in topic_mems[:4]:
+                    lines.append(f"- [{m.memory_type.value}] {m.content}")
+                sections.append("\n".join(lines))
+        except Exception:
+            pass
+    
+    # 6. Contradictions to resolve
+    try:
+        contradictions = await typed_memory_store.detect_contradictions(user_id)
+        if contradictions:
+            lines = ["## ⚠ Contradictions to Resolve"]
+            for c in contradictions[:2]:
+                lines.append(f"- '{c['memory_a']['content'][:50]}' vs '{c['memory_b']['content'][:50]}'")
+            sections.append("\n".join(lines))
+    except Exception:
+        pass
+    
+    # Assemble and trim to budget
+    prompt = "\n\n".join(sections)
+    if len(prompt) > max_chars:
+        prompt = prompt[:max_chars] + "\n[...truncated]"
+    
+    # Stats
+    stats = await typed_memory_store.get_stats(user_id)
+    
+    return [TextContent(type="text", text=compact_json({
+        "memory_prompt": prompt,
+        "sections": len(sections),
+        "chars": len(prompt),
+        "estimated_tokens": len(prompt) // 4,
+        "memory_stats": stats,
+    }))]
+
+
+async def handle_belief_auto_check(args: Dict[str, Any]) -> List[TextContent]:
+    """Re-evaluate beliefs against semantic evidence."""
+    if not typed_memory_store:
+        return [TextContent(type="text", text=compact_json({"error": "Typed memory store not initialized"}))]
+    
+    report = await typed_memory_store.belief_auto_check(args["user_id"])
+    
+    changed = [r for r in report if r["changed"]]
+    return [TextContent(type="text", text=compact_json({
+        "beliefs_checked": len(report),
+        "beliefs_updated": len(changed),
+        "changes": changed,
+        "stable": [r for r in report if not r["changed"]],
+    }))]
+
+
+# === EXPERIMENT / RESEARCH HANDLERS ===
+
+async def handle_trace_claim_reasoning(args: Dict[str, Any]) -> List[TextContent]:
+    """Audit trail: trace WHY a claim was blocked/adjusted."""
+    import sqlite3 as sync_sqlite
+    import os
+    db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "pltm_mcp.db")
+    conn = sync_sqlite.connect(db_path)
+
+    trace = {}
+    claim_text = args.get("claim", "")
+    claim_id = args.get("claim_id", "")
+    domain = args.get("domain", "")
+
+    try:
+        # Find matching claims in prediction_book
+        if claim_id:
+            claims = conn.execute(
+                "SELECT id, timestamp, claim, domain, felt_confidence, epistemic_status, has_verified, "
+                "verified_at, actual_truth, was_correct, calibration_error, correction_source, correction_detail "
+                "FROM prediction_book WHERE id = ?", (claim_id,)
+            ).fetchall()
+        elif claim_text:
+            claims = conn.execute(
+                "SELECT id, timestamp, claim, domain, felt_confidence, epistemic_status, has_verified, "
+                "verified_at, actual_truth, was_correct, calibration_error, correction_source, correction_detail "
+                "FROM prediction_book WHERE claim LIKE ? ORDER BY timestamp DESC LIMIT 10",
+                (f"%{claim_text}%",)
+            ).fetchall()
+        else:
+            claims = conn.execute(
+                "SELECT id, timestamp, claim, domain, felt_confidence, epistemic_status, has_verified, "
+                "verified_at, actual_truth, was_correct, calibration_error, correction_source, correction_detail "
+                "FROM prediction_book ORDER BY timestamp DESC LIMIT 10"
+            ).fetchall()
+
+        trace["claims"] = []
+        for c in claims:
+            claim_domain = c[3] or "general"
+            entry = {
+                "id": c[0], "claim": c[2], "domain": claim_domain,
+                "felt_confidence": c[4], "epistemic_status": c[5],
+                "has_verified": bool(c[6]), "was_correct": c[9],
+                "calibration_error": c[10],
+            }
+            if c[11]:
+                entry["correction_source"] = c[11]
+            if c[12]:
+                entry["correction_detail"] = c[12]
+
+            # Get calibration for this domain
+            cal = conn.execute(
+                "SELECT accuracy_ratio, overconfidence_ratio, total_claims, avg_calibration_error "
+                "FROM calibration_cache WHERE domain = ?", (claim_domain,)
+            ).fetchone()
+            if cal:
+                adjusted = round(c[4] * cal[0], 3) if c[4] else None
+                entry["calibration"] = {
+                    "domain_accuracy": round(cal[0], 3),
+                    "overconfidence_ratio": round(cal[1], 3),
+                    "domain_claims": cal[2],
+                    "avg_error": round(cal[3], 3),
+                    "adjusted_confidence": adjusted,
+                }
+                # Reconstruct decision
+                if adjusted is not None:
+                    if adjusted >= 0.8:
+                        entry["decision_trace"] = f"Felt {c[4]:.0%} → calibrated to {adjusted:.0%} → PROCEED (high confidence)"
+                    elif adjusted >= 0.5:
+                        entry["decision_trace"] = f"Felt {c[4]:.0%} → calibrated to {adjusted:.0%} → PROCEED WITH HEDGING"
+                    else:
+                        entry["decision_trace"] = f"Felt {c[4]:.0%} → calibrated to {adjusted:.0%} → VERIFY REQUIRED (below threshold)"
+
+            trace["claims"].append(entry)
+
+        # Get related interventions
+        if claim_text:
+            interventions = conn.execute(
+                "SELECT timestamp, claim, domain, felt_confidence, adjusted_confidence, action_taken, outcome "
+                "FROM epistemic_interventions WHERE claim LIKE ? ORDER BY timestamp DESC LIMIT 10",
+                (f"%{claim_text}%",)
+            ).fetchall()
+        elif domain:
+            interventions = conn.execute(
+                "SELECT timestamp, claim, domain, felt_confidence, adjusted_confidence, action_taken, outcome "
+                "FROM epistemic_interventions WHERE domain = ? ORDER BY timestamp DESC LIMIT 10",
+                (domain,)
+            ).fetchall()
+        else:
+            interventions = conn.execute(
+                "SELECT timestamp, claim, domain, felt_confidence, adjusted_confidence, action_taken, outcome "
+                "FROM epistemic_interventions ORDER BY timestamp DESC LIMIT 20"
+            ).fetchall()
+
+        trace["interventions"] = [
+            {"claim": i[1], "domain": i[2], "felt": i[3], "adjusted": i[4],
+             "action": i[5], "outcome": i[6]} for i in interventions
+        ]
+
+        # Domain calibration summary
+        if domain:
+            cal = conn.execute(
+                "SELECT * FROM calibration_cache WHERE domain = ?", (domain,)
+            ).fetchone()
+            if cal:
+                trace["domain_calibration"] = {
+                    "domain": cal[0], "total_claims": cal[1], "verified": cal[2],
+                    "correct": cal[3], "accuracy_ratio": round(cal[4], 3),
+                    "avg_felt_confidence": round(cal[5], 3),
+                    "avg_calibration_error": round(cal[6], 3),
+                    "overconfidence_ratio": round(cal[7], 3),
+                }
+
+    except Exception as e:
+        trace["error"] = str(e)
+
+    conn.close()
+    return [TextContent(type="text", text=compact_json({"ok": True, "trace": trace}))]
+
+
+async def handle_constraint_sensitivity_test(args: Dict[str, Any]) -> List[TextContent]:
+    """Simulate different calibration levels without modifying actual data."""
+    import sqlite3 as sync_sqlite
+    import os
+    db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "pltm_mcp.db")
+    conn = sync_sqlite.connect(db_path)
+
+    domain = args["domain"]
+    sim_accuracy = args["simulated_accuracy"]
+    test_claims = args.get("test_claims", [])
+
+    result = {"domain": domain, "simulated_accuracy": sim_accuracy}
+
+    try:
+        # Get actual calibration
+        actual = conn.execute(
+            "SELECT accuracy_ratio, overconfidence_ratio, total_claims, avg_calibration_error "
+            "FROM calibration_cache WHERE domain = ?", (domain,)
+        ).fetchone()
+
+        if actual:
+            result["actual_calibration"] = {
+                "accuracy_ratio": round(actual[0], 3),
+                "overconfidence_ratio": round(actual[1], 3),
+                "total_claims": actual[2],
+                "avg_error": round(actual[3], 3),
+            }
+        else:
+            result["actual_calibration"] = {"note": "No calibration data for this domain"}
+
+        # Simulate with test claims
+        if test_claims:
+            simulated = []
+            for tc in test_claims:
+                claim = tc.get("claim", "")
+                felt = tc.get("felt_confidence", 0.7)
+                adjusted_actual = round(felt * (actual[0] if actual else 0.6), 3)
+                adjusted_sim = round(felt * sim_accuracy, 3)
+
+                actual_action = "PROCEED" if adjusted_actual >= 0.5 else "VERIFY"
+                sim_action = "PROCEED" if adjusted_sim >= 0.5 else "VERIFY"
+
+                simulated.append({
+                    "claim": claim[:100],
+                    "felt_confidence": felt,
+                    "actual_adjusted": adjusted_actual,
+                    "actual_action": actual_action,
+                    "simulated_adjusted": adjusted_sim,
+                    "simulated_action": sim_action,
+                    "behavior_changed": actual_action != sim_action,
+                })
+            result["test_results"] = simulated
+            result["behavior_changes"] = sum(1 for s in simulated if s["behavior_changed"])
+        else:
+            # Replay historical claims through simulated calibration
+            historical = conn.execute(
+                "SELECT claim, felt_confidence, was_correct FROM prediction_book WHERE domain = ? AND actual_truth IS NOT NULL",
+                (domain,)
+            ).fetchall()
+
+            if historical:
+                actual_ratio = actual[0] if actual else 0.6
+                replay = []
+                actual_blocked = 0
+                sim_blocked = 0
+                for h in historical:
+                    felt = h[1] or 0.5
+                    adj_actual = round(felt * actual_ratio, 3)
+                    adj_sim = round(felt * sim_accuracy, 3)
+                    a_block = adj_actual < 0.5
+                    s_block = adj_sim < 0.5
+                    if a_block:
+                        actual_blocked += 1
+                    if s_block:
+                        sim_blocked += 1
+                    replay.append({
+                        "claim": h[0][:80], "felt": felt, "was_correct": bool(h[2]),
+                        "actual_adj": adj_actual, "actual_blocked": a_block,
+                        "sim_adj": adj_sim, "sim_blocked": s_block,
+                    })
+                result["historical_replay"] = {
+                    "total_claims": len(historical),
+                    "actual_blocked": actual_blocked,
+                    "simulated_blocked": sim_blocked,
+                    "delta_blocked": sim_blocked - actual_blocked,
+                    "details": replay[:20],
+                }
+            else:
+                result["historical_replay"] = {"note": "No resolved claims in this domain to replay"}
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    conn.close()
+    return [TextContent(type="text", text=compact_json({"ok": True, "sensitivity": result}))]
+
+
+async def handle_domain_cognitive_map(args: Dict[str, Any]) -> List[TextContent]:
+    """Map cognitive topology: claims, errors, calibration per domain."""
+    import sqlite3 as sync_sqlite
+    import os
+    db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "pltm_mcp.db")
+    conn = sync_sqlite.connect(db_path)
+
+    domain_filter = args.get("domain", "")
+    include_claims = args.get("include_claims", False)
+    include_interventions = args.get("include_interventions", False)
+
+    cognitive_map = {"domains": []}
+
+    try:
+        # Get all domains from prediction_book
+        if domain_filter:
+            domains = [(domain_filter,)]
+        else:
+            domains = conn.execute(
+                "SELECT DISTINCT domain FROM prediction_book WHERE domain IS NOT NULL"
+            ).fetchall()
+
+        for (dom,) in domains:
+            d = {"domain": dom}
+
+            # Claim stats
+            stats = conn.execute(
+                "SELECT COUNT(*), "
+                "SUM(CASE WHEN actual_truth IS NOT NULL THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN was_correct = 1 THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN was_correct = 0 AND actual_truth IS NOT NULL THEN 1 ELSE 0 END), "
+                "AVG(felt_confidence), AVG(calibration_error) "
+                "FROM prediction_book WHERE domain = ?", (dom,)
+            ).fetchone()
+            d["claims"] = {
+                "total": stats[0], "resolved": stats[1] or 0,
+                "correct": stats[2] or 0, "failures": stats[3] or 0,
+                "avg_felt_confidence": round(stats[4] or 0, 3),
+                "avg_calibration_error": round(stats[5] or 0, 3),
+            }
+            if stats[1] and stats[1] > 0:
+                d["claims"]["accuracy"] = round((stats[2] or 0) / stats[1], 3)
+
+            # Calibration
+            cal = conn.execute(
+                "SELECT accuracy_ratio, overconfidence_ratio, avg_felt_confidence, avg_calibration_error "
+                "FROM calibration_cache WHERE domain = ?", (dom,)
+            ).fetchone()
+            if cal:
+                d["calibration"] = {
+                    "accuracy_ratio": round(cal[0], 3),
+                    "overconfidence_ratio": round(cal[1], 3),
+                    "avg_felt_confidence": round(cal[2], 3),
+                    "avg_error": round(cal[3], 3),
+                }
+
+            # Intervention count
+            intv = conn.execute(
+                "SELECT COUNT(*), SUM(CASE WHEN action_taken = 'VERIFY' THEN 1 ELSE 0 END) "
+                "FROM epistemic_interventions WHERE domain = ?", (dom,)
+            ).fetchone()
+            d["interventions"] = {"total": intv[0] or 0, "verify_triggered": intv[1] or 0}
+
+            # Confabulations in domain
+            confab = conn.execute(
+                "SELECT COUNT(*) FROM confabulation_log WHERE domain = ?", (dom,)
+            ).fetchone()
+            d["confabulations"] = confab[0] if confab else 0
+
+            # Optional: individual claims
+            if include_claims:
+                claim_rows = conn.execute(
+                    "SELECT id, claim, felt_confidence, was_correct, calibration_error, epistemic_status "
+                    "FROM prediction_book WHERE domain = ? ORDER BY timestamp DESC LIMIT 50", (dom,)
+                ).fetchall()
+                d["claim_details"] = [
+                    {"id": r[0], "claim": r[1][:120], "felt": r[2], "correct": r[3],
+                     "cal_error": r[4], "status": r[5]} for r in claim_rows
+                ]
+
+            # Optional: interventions
+            if include_interventions:
+                intv_rows = conn.execute(
+                    "SELECT claim, felt_confidence, adjusted_confidence, action_taken, outcome "
+                    "FROM epistemic_interventions WHERE domain = ? ORDER BY timestamp DESC LIMIT 30", (dom,)
+                ).fetchall()
+                d["intervention_details"] = [
+                    {"claim": r[0][:120], "felt": r[1], "adjusted": r[2],
+                     "action": r[3], "outcome": r[4]} for r in intv_rows
+                ]
+
+            cognitive_map["domains"].append(d)
+
+        # Cross-domain summary
+        total_claims = sum(d["claims"]["total"] for d in cognitive_map["domains"])
+        total_failures = sum(d["claims"]["failures"] for d in cognitive_map["domains"])
+        cognitive_map["summary"] = {
+            "total_domains": len(cognitive_map["domains"]),
+            "total_claims": total_claims,
+            "total_failures": total_failures,
+            "overall_failure_rate": round(total_failures / max(total_claims, 1), 3),
+            "highest_error_domain": max(cognitive_map["domains"], key=lambda x: x["claims"]["avg_calibration_error"])["domain"] if cognitive_map["domains"] else None,
+        }
+
+    except Exception as e:
+        cognitive_map["error"] = str(e)
+
+    conn.close()
+    return [TextContent(type="text", text=compact_json({"ok": True, "map": cognitive_map}))]
+
+
+# === DATA ACCESS HANDLER ===
+
+async def handle_query_pltm_sql(args: Dict[str, Any]) -> List[TextContent]:
+    """Execute read-only SQL against the PLTM database."""
+    import sqlite3 as sync_sqlite
+    import os
+
+    sql = args["sql"].strip()
+
+    # Safety: only allow SELECT and PRAGMA
+    allowed = sql.upper().startswith(("SELECT", "PRAGMA"))
+    if not allowed:
+        return [TextContent(type="text", text=compact_json({"ok": False, "error": "Only SELECT and PRAGMA queries allowed"}))]
+
+    # Block dangerous patterns
+    dangerous = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH", "DETACH"]
+    for d in dangerous:
+        if d in sql.upper().split():
+            return [TextContent(type="text", text=compact_json({"ok": False, "error": f"Blocked: {d} not allowed in read-only mode"}))]
+
+    db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "pltm_mcp.db")
+
+    try:
+        conn = sync_sqlite.connect(db_path)
+        params = args.get("params", [])
+        cur = conn.execute(sql, params)
+        columns = [desc[0] for desc in cur.description] if cur.description else []
+        rows = cur.fetchall()
+        conn.close()
+
+        # Limit output
+        if len(rows) > 200:
+            rows = rows[:200]
+            truncated = True
+        else:
+            truncated = False
+
+        return [TextContent(type="text", text=compact_json({
+            "ok": True,
+            "columns": columns,
+            "rows": rows,
+            "count": len(rows),
+            "truncated": truncated,
+        }))]
+    except Exception as e:
+        return [TextContent(type="text", text=compact_json({"ok": False, "error": str(e)}))]
+
+
+# ========================================================================
+# TYPED MEMORY HANDLERS
+# ========================================================================
+
+async def handle_store_typed(args: Dict[str, Any], mem_type: str) -> List[TextContent]:
+    """Store a typed memory (episodic, semantic, belief, or procedural)."""
+    import time as _time
+    from src.memory.memory_types import TypedMemory, MemoryType
+    
+    mt = MemoryType(mem_type)
+    now = _time.time()
+    
+    mem = TypedMemory(
+        id="",
+        memory_type=mt,
+        user_id=args["user_id"],
+        content=args.get("content", args.get("trigger", "") + " → " + args.get("action", "")),
+        context=args.get("context", ""),
+        source=args.get("source", "observed"),
+        strength=1.0,
+        created_at=now,
+        last_accessed=now,
+        confidence=args.get("confidence", 0.5 if mt == MemoryType.BELIEF else 0.8),
+        episode_timestamp=now if mt == MemoryType.EPISODIC else 0,
+        emotional_valence=args.get("emotional_valence", 0.0),
+        trigger=args.get("trigger", ""),
+        action=args.get("action", ""),
+        tags=args.get("tags", []),
+    )
+    
+    mem_id = await typed_memory_store.store(mem)
+    
+    return [TextContent(type="text", text=compact_json({
+        "stored": True,
+        "id": mem_id,
+        "type": mem_type,
+        "content": mem.content[:100],
+        "strength": mem.strength,
+        "confidence": mem.confidence,
+    }))]
+
+
+async def handle_recall_memories(args: Dict[str, Any]) -> List[TextContent]:
+    """Recall typed memories with type-aware retrieval."""
+    from src.memory.memory_types import MemoryType
+    
+    mt = None
+    if args.get("memory_type"):
+        mt = MemoryType(args["memory_type"])
+    
+    memories = await typed_memory_store.query(
+        user_id=args["user_id"],
+        memory_type=mt,
+        min_strength=args.get("min_strength", 0.1),
+        limit=args.get("limit", 20),
+        tags=args.get("tags"),
+    )
+    
+    results = []
+    for mem in memories:
+        entry = {
+            "id": mem.id,
+            "type": mem.memory_type.value,
+            "content": mem.content,
+            "strength": round(mem.current_strength(), 3),
+            "confidence": round(mem.confidence, 3),
+            "tags": mem.tags,
+        }
+        if mem.memory_type.value == "episodic":
+            entry["emotional_valence"] = mem.emotional_valence
+            entry["context"] = mem.context
+        elif mem.memory_type.value == "belief":
+            entry["evidence_for"] = len(mem.evidence_for)
+            entry["evidence_against"] = len(mem.evidence_against)
+        elif mem.memory_type.value == "procedural":
+            entry["trigger"] = mem.trigger
+            entry["action"] = mem.action
+            entry["success_rate"] = (
+                round(mem.success_count / max(1, mem.success_count + mem.failure_count), 2)
+            )
+        results.append(entry)
+    
+    return [TextContent(type="text", text=compact_json({
+        "count": len(results),
+        "memories": results,
+    }))]
+
+
+async def handle_search_memories(args: Dict[str, Any]) -> List[TextContent]:
+    """Full-text search across typed memories."""
+    memories = await typed_memory_store.search(
+        user_id=args["user_id"],
+        query=args["query"],
+        limit=args.get("limit", 20),
+    )
+    
+    results = [{
+        "id": m.id,
+        "type": m.memory_type.value,
+        "content": m.content,
+        "strength": round(m.current_strength(), 3),
+        "confidence": round(m.confidence, 3),
+    } for m in memories]
+    
+    return [TextContent(type="text", text=compact_json({
+        "query": args["query"],
+        "count": len(results),
+        "results": results,
+    }))]
+
+
+async def handle_update_belief_mem(args: Dict[str, Any]) -> List[TextContent]:
+    """Update a belief with new evidence."""
+    belief = await typed_memory_store.update_belief(
+        belief_id=args["belief_id"],
+        evidence_type=args["evidence_type"],
+        evidence_id=args.get("evidence_id", ""),
+        confidence_delta=args["confidence_delta"],
+    )
+    
+    if not belief:
+        return [TextContent(type="text", text=compact_json({"error": "Belief not found or not a belief type"}))]
+    
+    return [TextContent(type="text", text=compact_json({
+        "updated": True,
+        "id": belief.id,
+        "content": belief.content,
+        "new_confidence": round(belief.confidence, 3),
+        "evidence_for": len(belief.evidence_for),
+        "evidence_against": len(belief.evidence_against),
+    }))]
+
+
+async def handle_record_procedure(args: Dict[str, Any]) -> List[TextContent]:
+    """Record procedure outcome."""
+    proc = await typed_memory_store.record_procedure_outcome(
+        procedure_id=args["procedure_id"],
+        success=args["success"],
+    )
+    
+    if not proc:
+        return [TextContent(type="text", text=compact_json({"error": "Procedure not found"}))]
+    
+    total = proc.success_count + proc.failure_count
+    return [TextContent(type="text", text=compact_json({
+        "updated": True,
+        "id": proc.id,
+        "trigger": proc.trigger,
+        "action": proc.action,
+        "success_count": proc.success_count,
+        "failure_count": proc.failure_count,
+        "success_rate": round(proc.success_count / max(1, total), 2),
+        "strength": round(proc.strength, 3),
+    }))]
+
+
+async def handle_consolidate(args: Dict[str, Any]) -> List[TextContent]:
+    """Run episodic → semantic consolidation."""
+    new_semantics = await typed_memory_store.consolidate_episodes(
+        user_id=args["user_id"],
+        min_episodes=args.get("min_episodes", 3),
+    )
+    
+    results = [{
+        "id": s.id,
+        "content": s.content,
+        "confidence": round(s.confidence, 3),
+        "consolidated_from": len(s.consolidated_from),
+    } for s in new_semantics]
+    
+    return [TextContent(type="text", text=compact_json({
+        "consolidated": len(results),
+        "new_semantic_memories": results,
+    }))]
+
+
+async def handle_memory_stats(args: Dict[str, Any]) -> List[TextContent]:
+    """Get typed memory statistics."""
+    stats = await typed_memory_store.get_stats(args["user_id"])
+    return [TextContent(type="text", text=compact_json(stats))]
+
+
+async def handle_detect_contradictions(args: Dict[str, Any]) -> List[TextContent]:
+    """Find contradicting memories."""
+    contradictions = await typed_memory_store.detect_contradictions(args["user_id"])
+    return [TextContent(type="text", text=compact_json({
+        "contradictions": contradictions,
+        "count": len(contradictions),
+        "action": "Review each pair and correct_memory or forget_memory the wrong one." if contradictions else "No contradictions found."
+    }))]
+
+
+async def handle_what_do_i_know(args: Dict[str, Any]) -> List[TextContent]:
+    """Synthesized cross-type retrieval for a topic."""
+    result = await typed_memory_store.what_do_i_know_about(
+        user_id=args["user_id"], topic=args["topic"],
+        limit=args.get("limit", 30),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_auto_tag(args: Dict[str, Any]) -> List[TextContent]:
+    """Auto-tag all memories for a user."""
+    result = await typed_memory_store.auto_tag_all(args["user_id"])
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_correct_memory(args: Dict[str, Any]) -> List[TextContent]:
+    """Correct a memory's content."""
+    mem = await typed_memory_store.correct_memory(
+        memory_id=args["memory_id"], new_content=args["new_content"],
+        reason=args.get("reason", ""), new_confidence=args.get("new_confidence"),
+    )
+    if not mem:
+        return [TextContent(type="text", text=compact_json({"error": "Memory not found"}))]
+    return [TextContent(type="text", text=compact_json({
+        "corrected": True, "id": mem.id, "new_content": mem.content,
+        "confidence": round(mem.confidence, 3), "correction_history": mem.context[:200],
+    }))]
+
+
+async def handle_forget_memory(args: Dict[str, Any]) -> List[TextContent]:
+    """Explicitly delete a memory."""
+    deleted = await typed_memory_store.forget_memory(
+        memory_id=args["memory_id"], reason=args.get("reason", ""),
+    )
+    return [TextContent(type="text", text=compact_json({
+        "forgotten": deleted, "id": args["memory_id"],
+    }))]
+
+
+async def handle_auto_prune(args: Dict[str, Any]) -> List[TextContent]:
+    """Auto-prune decayed memories."""
+    result = await typed_memory_store.auto_prune(
+        user_id=args["user_id"],
+        strength_threshold=args.get("strength_threshold", 0.05),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_get_relevant_context(args: Dict[str, Any]) -> List[TextContent]:
+    """Pre-fetch conversation-relevant memories."""
+    result = await typed_memory_store.get_relevant_context(
+        user_id=args["user_id"],
+        conversation_topic=args["conversation_topic"],
+        limit=args.get("limit", 15),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_user_timeline(args: Dict[str, Any]) -> List[TextContent]:
+    """Chronological memory timeline."""
+    result = await typed_memory_store.user_timeline(
+        user_id=args["user_id"],
+        limit=args.get("limit", 20),
+        offset=args.get("offset", 0),
+    )
+    return [TextContent(type="text", text=compact_json(result))]
+
+
+async def handle_semantic_search(args: Dict[str, Any]) -> List[TextContent]:
+    """Semantic similarity search using embeddings."""
+    if not embedding_store:
+        return [TextContent(type="text", text=compact_json({"error": "Embedding store not initialized"}))]
+    
+    hits = await embedding_store.search(
+        query=args["query"],
+        limit=args.get("limit", 10),
+        min_similarity=args.get("min_similarity", 0.3),
+    )
+    
+    # Enrich with memory content
+    results = []
+    for hit in hits:
+        mem = await typed_memory_store.get(hit["memory_id"])
+        if mem:
+            results.append({
+                "id": mem.id,
+                "type": mem.memory_type.value,
+                "content": mem.content,
+                "similarity": hit["similarity"],
+                "strength": round(mem.current_strength(), 3),
+                "confidence": round(mem.confidence, 3),
+                "tags": mem.tags,
+            })
+    
+    return [TextContent(type="text", text=compact_json({
+        "query": args["query"], "results": results, "count": len(results),
+    }))]
+
+
+async def handle_index_embeddings(args: Dict[str, Any]) -> List[TextContent]:
+    """Batch-index all typed memories for a user."""
+    if not embedding_store:
+        return [TextContent(type="text", text=compact_json({"error": "Embedding store not initialized"}))]
+    
+    # Get all memories for user
+    all_mems = await typed_memory_store.query(args["user_id"], limit=10000)
+    
+    batch = []
+    for mem in all_mems:
+        text = mem.content
+        if mem.trigger:
+            text += f" | trigger: {mem.trigger}"
+        if mem.action:
+            text += f" | action: {mem.action}"
+        batch.append((mem.id, text))
+    
+    indexed = await embedding_store.index_batch(batch)
+    stats = await embedding_store.get_stats()
+    
+    return [TextContent(type="text", text=compact_json({
+        "newly_indexed": indexed,
+        "total_memories": len(all_mems),
+        "total_indexed": stats["indexed_count"],
+        "model": stats["model"],
+    }))]
+
+
+async def handle_find_similar(args: Dict[str, Any]) -> List[TextContent]:
+    """Find memories similar to a given memory."""
+    if not embedding_store:
+        return [TextContent(type="text", text=compact_json({"error": "Embedding store not initialized"}))]
+    
+    hits = await embedding_store.find_similar(
+        memory_id=args["memory_id"],
+        limit=args.get("limit", 5),
+        min_similarity=args.get("min_similarity", 0.5),
+    )
+    
+    # Enrich with memory content
+    results = []
+    for hit in hits:
+        mem = await typed_memory_store.get(hit["memory_id"])
+        if mem:
+            results.append({
+                "id": mem.id,
+                "type": mem.memory_type.value,
+                "content": mem.content,
+                "similarity": hit["similarity"],
+                "tags": mem.tags,
+            })
+    
+    return [TextContent(type="text", text=compact_json({
+        "source_id": args["memory_id"], "similar": results, "count": len(results),
+    }))]
 
 
 async def main():
