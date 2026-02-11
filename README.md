@@ -11,50 +11,59 @@ An MCP server that gives Claude Desktop persistent memory, self-awareness, epist
 
 ---
 
-## Quick Start (5 minutes)
+## Quick Start — 3 Commands
+
+```bash
+git clone https://github.com/Alby2007/PLTM.git && cd PLTM
+python setup_pltm.py          # Creates venv, installs deps, inits DB, downloads model
+python configure_claude.py    # Auto-configures Claude Desktop (detects OS + paths)
+```
+
+Then **restart Claude Desktop** — 136 tools will be available.
+
+> **Optional:** Add your free [Groq API key](https://console.groq.com) to `.env` for LLM-powered tools (ingestion, fact-checking, bootstrapping). Core memory tools work without it.
+
+**Verify it works** — ask Claude:
+```
+Use auto_init_session to check system state
+```
+
+**Run health check** (diagnose issues):
+```bash
+python health_check.py
+```
+
+<details>
+<summary><strong>Manual setup (alternative)</strong></summary>
 
 ### 1. Clone & install
 
 ```bash
 git clone https://github.com/Alby2007/PLTM.git
 cd PLTM
-
-# Create virtual environment
 python3.11 -m venv .venv
 source .venv/bin/activate        # macOS/Linux
 # .venv\Scripts\activate         # Windows
-
-# Install dependencies (lite — all analysis tools, no torch/outlines)
 pip install --upgrade pip
 pip install -r requirements-lite.txt
-
-# OR full install (adds legacy personality/pipeline tools — needs torch, outlines, etc.)
-# pip install -r requirements.txt
 ```
 
 ### 2. Set API keys
 
-Create a `.env` file (or export directly):
-
 ```bash
-# Required for LLM-powered tools (ingestion, fact-checking, bootstrapping)
-export GROQ_API_KEY="your-groq-key"       # Free at console.groq.com
-
-# Optional
-export DEEPSEEK_API_KEY="your-key"        # platform.deepseek.com
+cp .env.example .env
+# Edit .env — set GROQ_API_KEY (free at console.groq.com)
 ```
 
 ### 3. Configure Claude Desktop
 
-Edit your Claude Desktop config:
+Edit your config file:
 
 | OS | Path |
 |----|------|
 | **macOS** | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | **Windows** | `%APPDATA%\Claude\claude_desktop_config.json` |
 | **Linux** | `~/.config/Claude/claude_desktop_config.json` |
-
-Add this (replace `/path/to/PLTM` with your actual clone path):
 
 ```json
 {
@@ -71,34 +80,9 @@ Add this (replace `/path/to/PLTM` with your actual clone path):
 }
 ```
 
-**Windows example:**
-```json
-{
-  "mcpServers": {
-    "pltm": {
-      "command": "C:/path/to/PLTM/.venv/Scripts/python.exe",
-      "args": ["-m", "mcp_server.pltm_server"],
-      "env": {
-        "PYTHONPATH": "C:/path/to/PLTM",
-        "GROQ_API_KEY": "your-groq-key"
-      }
-    }
-  }
-}
-```
-
 ### 4. Restart Claude Desktop
 
-The MCP server auto-starts. You should see **136 tools** available.
-
-### 5. Verify
-
-Ask Claude:
-```
-Use auto_init_session to check system state
-```
-
-If you see personality data, goals, and calibration info — it's working.
+</details>
 
 ---
 
@@ -374,6 +358,9 @@ PLTM/
 ├── scripts/                        # Utility scripts
 ├── data/
 │   └── pltm_mcp.db                # Knowledge base (40 tables)
+├── setup_pltm.py                  # One-command setup (venv, deps, DB, model)
+├── configure_claude.py            # Auto-configure Claude Desktop
+├── health_check.py                # Verify installation
 ├── backfill_embeddings.py          # Batch embedding indexer
 ├── migrate_atoms_to_typed.py       # Atom → typed memory migration
 ├── requirements.txt                # Full dependencies
