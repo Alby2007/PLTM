@@ -34,6 +34,8 @@ class SQLiteGraphStore:
         
         self._conn = await aiosqlite.connect(str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
+        await self._conn.execute("PRAGMA journal_mode=WAL")
+        await self._conn.execute("PRAGMA busy_timeout=10000")
         
         await self._setup_schema()
         logger.info(f"Connected to database: {self.db_path}")

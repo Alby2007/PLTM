@@ -149,11 +149,14 @@ class TypedMemoryStore:
         self._conn: Optional[aiosqlite.Connection] = None
         self.embeddings = embedding_store  # Optional EmbeddingStore
         self.jury = jury  # Optional MemoryJury validation gate
+        self.provenance_tracker = None  # Set after init to avoid circular deps
     
     async def connect(self):
         """Connect and create schema."""
         self._conn = await aiosqlite.connect(self.db_path)
         self._conn.row_factory = aiosqlite.Row
+        await self._conn.execute("PRAGMA journal_mode=WAL")
+        await self._conn.execute("PRAGMA busy_timeout=10000")
         await self._setup_schema()
     
     async def close(self):
@@ -297,6 +300,18 @@ class TypedMemoryStore:
         ))
         await self._conn.commit()
         
+        # Auto-record provenance (fire-and-forget)
+        if self.provenance_tracker and mem.id:
+            async def _prov_bg(mid, src, ctx):
+                try:
+                    await self.provenance_tracker.record_provenance(
+                        memory_id=mid, pipeline_stage="store",
+                        extraction_pattern=src, extraction_confidence=mem.confidence,
+                    )
+                except Exception as e:
+                    logger.warning(f"Provenance record failed for {mid}: {e}")
+            asyncio.create_task(_prov_bg(mem.id, mem.source, mem.context))
+
         # Auto-index embedding if store available (fire-and-forget to avoid timeout)
         if self.embeddings:
             async def _index_bg(mid, text):

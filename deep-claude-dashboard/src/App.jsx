@@ -13,13 +13,13 @@ import {
 
 const API = 'http://localhost:8787/api'
 
-function useFetch(endpoint) {
+function useFetch(endpoint, pollInterval = 30000) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
   const refetch = useCallback(() => {
-    setLoading(true)
+    setLoading(prev => data === null)
     fetch(`${API}${endpoint}`)
       .then(r => r.json())
       .then(d => { setData(d); setError(null) })
@@ -28,6 +28,11 @@ function useFetch(endpoint) {
   }, [endpoint])
 
   useEffect(() => { refetch() }, [refetch])
+  useEffect(() => {
+    if (!pollInterval) return
+    const id = setInterval(refetch, pollInterval)
+    return () => clearInterval(id)
+  }, [refetch, pollInterval])
   return { data, loading, error, refetch }
 }
 

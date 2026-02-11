@@ -92,6 +92,8 @@ class EmbeddingStore:
     async def connect(self):
         """Connect and create schema."""
         self._conn = await aiosqlite.connect(self.db_path)
+        await self._conn.execute("PRAGMA journal_mode=WAL")
+        await self._conn.execute("PRAGMA busy_timeout=10000")
         await self._setup_schema()
     
     async def close(self):

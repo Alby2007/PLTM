@@ -92,9 +92,46 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path == "/api/provenance":
                 self._json(self.get_provenance_data(params))
             else:
-                self._json({"error": "Not found"}, 404)
+                self._serve_static(path)
         except Exception as e:
             self._json({"error": str(e)}, 500)
+
+    def _serve_static(self, path):
+        """Serve built dashboard files from dist/ folder."""
+        dist_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
+        if not os.path.isdir(dist_dir):
+            self._json({"error": "Not found. Run 'npm run build' first for production mode."}, 404)
+            return
+
+        file_path = path.lstrip("/")
+        if not file_path or file_path == "/":
+            file_path = "index.html"
+
+        full_path = os.path.join(dist_dir, file_path)
+        if not os.path.isfile(full_path):
+            full_path = os.path.join(dist_dir, "index.html")
+
+        if not os.path.isfile(full_path):
+            self._json({"error": "Not found"}, 404)
+            return
+
+        ext = os.path.splitext(full_path)[1].lower()
+        content_types = {
+            ".html": "text/html", ".js": "application/javascript",
+            ".css": "text/css", ".json": "application/json",
+            ".svg": "image/svg+xml", ".png": "image/png",
+            ".ico": "image/x-icon", ".woff2": "font/woff2",
+        }
+        ct = content_types.get(ext, "application/octet-stream")
+
+        with open(full_path, "rb") as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ct)
+        self.send_header("Content-Length", str(len(data)))
+        self._cors()
+        self.end_headers()
+        self.wfile.write(data)
 
     def get_overview(self):
         conn = get_conn()

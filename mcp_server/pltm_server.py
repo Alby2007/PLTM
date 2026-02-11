@@ -113,8 +113,33 @@ async def initialize_pltm(custom_db_path: str = None):
     shared_memory_mgr = SharedMemoryManager(typed_memory_store)
     memory_portability = MemoryPortability(typed_memory_store)
     provenance_tracker = ProvenanceTracker(typed_memory_store)
+    typed_memory_store.provenance_tracker = provenance_tracker  # Wire auto-provenance
     confidence_decay_engine = ConfidenceDecayEngine(typed_memory_store, embedding_store)
     memory_auditor = MemoryAuditor(typed_memory_store, embedding_store, memory_jury)
+    
+    # Populate shared registry for handler modules
+    from mcp_server.handlers.registry import registry as _reg
+    _reg.store = store
+    _reg.pipeline = pipeline
+    _reg.personality_agent = personality_agent
+    _reg.personality_synth = personality_synth
+    _reg.mood_tracker = mood_tracker
+    _reg.mood_patterns = mood_patterns
+    _reg.conflict_resolver = conflict_resolver
+    _reg.contextual_personality = contextual_personality
+    _reg.typed_memory_store = typed_memory_store
+    _reg.embedding_store = embedding_store
+    _reg.typed_memory_pipeline = typed_memory_pipeline
+    _reg.decay_engine = decay_engine
+    _reg.consolidation_engine = consolidation_engine
+    _reg.contextual_retriever = contextual_retriever
+    _reg.conflict_surfacer = conflict_surfacer
+    _reg.memory_clusterer = memory_clusterer
+    _reg.shared_memory_mgr = shared_memory_mgr
+    _reg.memory_portability = memory_portability
+    _reg.provenance_tracker = provenance_tracker
+    _reg.confidence_decay_engine = confidence_decay_engine
+    _reg.memory_auditor = memory_auditor
     
     logger.info("PLTM MCP Server initialized (with embeddings + jury + pipeline + intelligence)")
 
